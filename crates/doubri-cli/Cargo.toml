@@ -5,6 +5,8 @@ edition = "2024"
 license = "MIT"
 publish = false
 repository = "https://github.com/hirosassa/doubri-rs"
+homepage = "https://github.com/hirosassa/doubri-rs"
+description = "A Rust implementation of doubri, a large-scale document deduplication toolkit"
 
 [package.metadata.dist]
 dist = true
