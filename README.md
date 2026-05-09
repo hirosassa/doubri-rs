@@ -19,18 +19,15 @@ doubri-rs detects and removes near-duplicate documents from massive text corpora
 
 ## Installation
 
-Install via the shell installer (Linux/macOS):
+Download a prebuilt binary from [GitHub Releases](https://github.com/hirosassa/doubri-rs/releases):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/hirosassa/doubri-rs/releases/latest/download/doubri-installer.sh | sh
+# Example for Linux x86_64
+curl -LO https://github.com/hirosassa/doubri-rs/releases/latest/download/doubri-x86_64-unknown-linux-gnu.tar.gz
+tar xzf doubri-x86_64-unknown-linux-gnu.tar.gz
 ```
 
-Or download a prebuilt binary from [GitHub Releases](https://github.com/hirosassa/doubri-rs/releases). Available targets:
-
-- `x86_64-unknown-linux-gnu`
-- `aarch64-unknown-linux-gnu`
-- `x86_64-apple-darwin`
-- `aarch64-apple-darwin`
+Available targets: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`
 
 Or build from source:
 
