@@ -1,0 +1,25 @@
+[package]
+name = "doubri-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+byteorder = "1"
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "bench"
+harness = false
+
+[[bench]]
+name = "bench_light"
+harness = false
