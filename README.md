@@ -1,5 +1,9 @@
 # doubri-rs
 
+[![build](https://github.com/hirosassa/doubri-rs/actions/workflows/test.yaml/badge.svg)](https://github.com/hirosassa/doubri-rs/actions/workflows/test.yaml)
+[![codecov](https://codecov.io/gh/hirosassa/doubri-rs/branch/main/graph/badge.svg?token=Q5FIA58YTN)](https://codecov.io/gh/hirosassa/doubri-rs)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/hirosassa/doubri-rs/blob/main/LICENSE)
+
 A Rust implementation of [doubri](https://github.com/swallow-llm/doubri), a large-scale document deduplication toolkit using MinHash and Locality-Sensitive Hashing (LSH).
 
 doubri-rs detects and removes near-duplicate documents from massive text corpora (e.g., Common Crawl) for LLM training data preprocessing. It runs on a single server without requiring distributed infrastructure like Spark or HDFS.
