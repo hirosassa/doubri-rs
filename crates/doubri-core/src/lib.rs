@@ -1,0 +1,9 @@
+pub mod apply;
+pub mod dedup;
+pub mod error;
+pub mod format;
+pub mod hash;
+pub mod merge;
+pub mod minhash;
+pub mod ngram;
+pub mod similarity;
