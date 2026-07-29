@@ -170,4 +170,71 @@ mod tests {
         // Threshold too high, no matches
         assert_eq!(count, 0);
     }
+
+    #[test]
+    fn test_pairwise_similarity_id_fallback_to_index() {
+        // No id field: ids fall back to the document's positional index.
+        let jsonl = r#"{"text":"hello world foo bar"}
+{"text":"hello world foo bar"}
+"#;
+        let mut output = Vec::new();
+        let count = compute_pairwise_similarity(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            3,
+            0.5,
+            "id",
+            "text",
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let output_str = String::from_utf8(output).unwrap();
+        // Format is "sim\tid_a\tid_b"; fallback ids are "0" and "1".
+        assert!(
+            output_str.contains("\t0\t1"),
+            "expected index-based fallback ids, got {:?}",
+            output_str
+        );
+    }
+
+    #[test]
+    fn test_pairwise_similarity_missing_text_field() {
+        let jsonl = r#"{"id":"doc1","body":"hello world"}"#;
+        let mut output = Vec::new();
+        let err = compute_pairwise_similarity(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            3,
+            0.3,
+            "id",
+            "text",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, DoubriError::MissingField { ref field } if field == "text"),
+            "expected MissingField for absent text field, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_pairwise_similarity_invalid_json() {
+        let jsonl = "{not valid json";
+        let mut output = Vec::new();
+        let err = compute_pairwise_similarity(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            3,
+            0.3,
+            "id",
+            "text",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Json(_)),
+            "expected Json error for malformed line, got {:?}",
+            err
+        );
+    }
 }

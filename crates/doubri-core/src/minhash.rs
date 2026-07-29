@@ -334,13 +334,67 @@ mod tests {
 
         let jsonl = r#"{"other":"hello world"}"#;
         let mut output = Vec::new();
-        let result = process_jsonl(
+        let err = process_jsonl(
             std::io::BufReader::new(jsonl.as_bytes()),
             &mut output,
             &config,
             "text",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, DoubriError::MissingField { ref field } if field == "text"),
+            "expected MissingField for absent text field, got {:?}",
+            err
         );
-        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_jsonl_non_string_field() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+
+        // The field exists but is not a string.
+        let jsonl = r#"{"text":123}"#;
+        let mut output = Vec::new();
+        let err = process_jsonl(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            &config,
+            "text",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, DoubriError::MissingField { ref field } if field == "text"),
+            "expected MissingField for non-string text field, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_process_jsonl_invalid_json() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+
+        let jsonl = "{not valid json";
+        let mut output = Vec::new();
+        let err = process_jsonl(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            &config,
+            "text",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Json(_)),
+            "expected Json error for malformed line, got {:?}",
+            err
+        );
     }
 
     #[test]
