@@ -211,6 +211,26 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_each_flag_index_out_of_bounds() {
+        // offset + doc_idx runs past the flag array on the second document.
+        let jsonl = "{\"text\":\"doc1\"}\n{\"text\":\"doc2\"}\n";
+        let flags = vec![FLAG_UNIQUE, FLAG_UNIQUE];
+        let mut output = Vec::new();
+        let err = apply_each(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            &flags,
+            1,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, DoubriError::InvalidFormat { .. }),
+            "expected InvalidFormat when doc index exceeds flags, got {:?}",
+            err
+        );
+    }
+
+    #[test]
     fn test_apply_whole_empty_lines_skipped() {
         let jsonl = "{\"text\":\"doc1\"}\n\n{\"text\":\"doc2\"}\n";
         let flags = vec![FLAG_UNIQUE, FLAG_UNIQUE];

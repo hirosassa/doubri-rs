@@ -398,4 +398,95 @@ mod tests {
             assert_eq!(signatures, read_sigs);
         }
     }
+
+    #[test]
+    fn test_read_src_file_non_numeric_count() {
+        let content = "abc\tdata/file.hash\n";
+        let mut cursor = Cursor::new(content.as_bytes());
+        let err = read_src_file(&mut cursor).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::InvalidFormat { ref msg } if msg.contains("invalid item count")),
+            "expected InvalidFormat for non-numeric count, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_read_src_file_missing_tab() {
+        // A line with a count but no tab-separated path.
+        let content = "100\n";
+        let mut cursor = Cursor::new(content.as_bytes());
+        let err = read_src_file(&mut cursor).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::InvalidFormat { ref msg } if msg.contains("missing file path")),
+            "expected InvalidFormat for missing path, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_read_hash_header_truncated_after_magic() {
+        // Valid magic but no header fields following it.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(HASH_MAGIC);
+        let mut cursor = Cursor::new(&buf);
+        let err = read_hash_header(&mut cursor).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Io(_)),
+            "expected Io error for truncated header, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_read_hash_data_truncated() {
+        // Header declares 3 docs but only one u64 of data is present.
+        let header = HashFileHeader {
+            num_documents: 3,
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        let mut buf = Vec::new();
+        buf.write_u64::<LittleEndian>(42).unwrap();
+        let mut cursor = Cursor::new(&buf);
+        let err = read_hash_data(&mut cursor, &header).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Io(_)),
+            "expected Io error for truncated data, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_read_idx_entry_partial_is_error() {
+        // A clean EOF between entries yields None, but a partial entry (group
+        // present, item_number/bucket_value missing) must be an error.
+        let mut buf = Vec::new();
+        buf.write_u32::<LittleEndian>(7).unwrap(); // group only
+        let mut cursor = Cursor::new(&buf);
+        let err = read_idx_entry(&mut cursor).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Io(_)),
+            "expected Io error for partial idx entry, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_hash_data_roundtrip_zero_docs() {
+        // Boundary: an empty signature set round-trips to an empty vec.
+        let header = HashFileHeader {
+            num_documents: 0,
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        let mut buf = Vec::new();
+        write_hash_data(&mut buf, &[], 0, 4).unwrap();
+        assert!(buf.is_empty());
+        let mut cursor = Cursor::new(&buf);
+        let read_sigs = read_hash_data(&mut cursor, &header).unwrap();
+        assert!(read_sigs.is_empty());
+    }
 }

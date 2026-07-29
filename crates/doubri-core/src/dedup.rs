@@ -389,7 +389,7 @@ mod tests {
         let hash_path = create_hash_file(dir.path(), "test.hash", &["hello world foo bar baz"]);
 
         let basename = dir.path().join("output").to_string_lossy().to_string();
-        dedup_group(&[hash_path.clone()], &basename, false).unwrap();
+        dedup_group(std::slice::from_ref(&hash_path), &basename, false).unwrap();
 
         let src_path = format!("{}.src", basename);
         let entries = read_src_file(&mut File::open(&src_path).unwrap()).unwrap();
@@ -414,7 +414,137 @@ mod tests {
 
     #[test]
     fn test_dedup_empty_input() {
-        let result = dedup_group(&[], "output", false);
-        assert!(result.is_err());
+        let err = dedup_group(&[], "output", false).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Config { .. }),
+            "expected Config error for no hash files, got {:?}",
+            err
+        );
+    }
+
+    /// Writes a hash file with an explicit config so callers can create
+    /// files with mismatching parameters.
+    fn create_hash_file_with_config(
+        dir: &Path,
+        name: &str,
+        texts: &[&str],
+        config: &MinHashConfig,
+    ) -> PathBuf {
+        let mut jsonl = String::new();
+        for text in texts {
+            jsonl.push_str(&format!("{{\"text\":\"{}\"}}\n", text));
+        }
+        let path = dir.join(name);
+        let mut file = File::create(&path).unwrap();
+        process_jsonl(BufReader::new(jsonl.as_bytes()), &mut file, config, "text").unwrap();
+        path
+    }
+
+    #[test]
+    fn test_dedup_config_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let config_a = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 3,
+            band_size: 2,
+        };
+        let config_b = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 3,
+            band_size: 4, // differs from config_a
+        };
+        let path_a =
+            create_hash_file_with_config(dir.path(), "a.hash", &["hello world foo"], &config_a);
+        let path_b =
+            create_hash_file_with_config(dir.path(), "b.hash", &["hello world foo"], &config_b);
+
+        let basename = dir.path().join("output").to_string_lossy().to_string();
+        let err = dedup_group(&[path_a, path_b], &basename, false).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Config { .. }),
+            "expected Config error for mismatched configs, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_dedup_three_identical_forward_marks_all_but_first() {
+        let dir = TempDir::new().unwrap();
+        let text = "this is a test document with enough text to hash";
+        let hash_path = create_hash_file(dir.path(), "test.hash", &[text, text, text]);
+
+        let basename = dir.path().join("output").to_string_lossy().to_string();
+        let result = dedup_group(&[hash_path], &basename, false).unwrap();
+
+        assert_eq!(result.total_documents, 3);
+        assert_eq!(result.duplicate_count, 2);
+
+        let flags = read_dup_flags(&mut File::open(format!("{}.dup", basename)).unwrap()).unwrap();
+        assert_eq!(flags, vec![FLAG_UNIQUE, FLAG_DUPLICATE, FLAG_DUPLICATE]);
+    }
+
+    #[test]
+    fn test_dedup_three_identical_reverse_marks_all_but_last() {
+        let dir = TempDir::new().unwrap();
+        let text = "this is a test document with enough text to hash";
+        let hash_path = create_hash_file(dir.path(), "test.hash", &[text, text, text]);
+
+        let basename = dir.path().join("output").to_string_lossy().to_string();
+        let result = dedup_group(&[hash_path], &basename, true).unwrap();
+
+        assert_eq!(result.total_documents, 3);
+        assert_eq!(result.duplicate_count, 2);
+
+        let flags = read_dup_flags(&mut File::open(format!("{}.dup", basename)).unwrap()).unwrap();
+        assert_eq!(flags, vec![FLAG_DUPLICATE, FLAG_DUPLICATE, FLAG_UNIQUE]);
+    }
+
+    #[test]
+    fn test_dedup_index_files_content() {
+        use crate::format::{NUM_INDEX_SPLITS, idx_file_path, read_idx_entry, read_idx_header};
+
+        let dir = TempDir::new().unwrap();
+        // Two distinct texts; count uniques from the .dup file rather than assuming.
+        let hash_path = create_hash_file(
+            dir.path(),
+            "test.hash",
+            &[
+                "hello world foo bar baz",
+                "completely different content here",
+            ],
+        );
+        let num_buckets = 3; // matches create_hash_file config
+
+        let basename = dir.path().join("output").to_string_lossy().to_string();
+        dedup_group(&[hash_path], &basename, false).unwrap();
+
+        let flags = read_dup_flags(&mut File::open(format!("{}.dup", basename)).unwrap()).unwrap();
+        let unique_count = flags.iter().filter(|&&f| f == FLAG_UNIQUE).count();
+
+        let mut total_entries = 0usize;
+        for split_idx in 0..NUM_INDEX_SPLITS {
+            let path = idx_file_path(&basename, split_idx as u8);
+            if !Path::new(&path).exists() {
+                continue;
+            }
+            let mut reader = BufReader::new(File::open(&path).unwrap());
+            // Header must be present and valid.
+            read_idx_header(&mut reader).unwrap();
+            while let Some(entry) = read_idx_entry(&mut reader).unwrap() {
+                // Each entry must land in the split matching its bucket value.
+                assert_eq!(
+                    (entry.bucket_value as usize) % NUM_INDEX_SPLITS,
+                    split_idx,
+                    "index entry placed in wrong split"
+                );
+                // Entry references must be within range of the single source.
+                assert_eq!(entry.group, 0);
+                assert!((entry.item_number as usize) < flags.len());
+                total_entries += 1;
+            }
+        }
+
+        // Every unique document contributes exactly one entry per bucket.
+        assert_eq!(total_entries, unique_count * num_buckets);
     }
 }

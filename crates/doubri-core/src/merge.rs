@@ -156,7 +156,7 @@ mod tests {
         process_jsonl(BufReader::new(jsonl.as_bytes()), &mut file, &config, "text").unwrap();
 
         let basename = dir.join(group_name).to_string_lossy().to_string();
-        dedup_group(&[hash_path.clone()], &basename, false).unwrap();
+        dedup_group(std::slice::from_ref(&hash_path), &basename, false).unwrap();
 
         (basename, vec![hash_path])
     }
@@ -263,5 +263,132 @@ mod tests {
 
         assert_eq!(flags1[0], FLAG_DUPLICATE);
         assert_eq!(flags2[0], FLAG_UNIQUE);
+    }
+
+    #[test]
+    fn test_merge_item_number_out_of_bounds() {
+        use crate::format::{write_dup_flags, write_idx_entry, write_idx_header};
+
+        let dir = TempDir::new().unwrap();
+        let basename1 = dir.path().join("group1").to_string_lossy().to_string();
+        let basename2 = dir.path().join("group2").to_string_lossy().to_string();
+
+        // Each group's dup array holds a single document.
+        for basename in [&basename1, &basename2] {
+            let mut file = File::create(format!("{}.dup", basename)).unwrap();
+            write_dup_flags(&mut file, &[FLAG_UNIQUE]).unwrap();
+        }
+
+        // Both groups have an entry in split 0 with the same bucket value so a
+        // cross-group group forms, but group2's item_number is out of range.
+        let mut f1 = File::create(idx_file_path(&basename1, 0)).unwrap();
+        write_idx_header(&mut f1).unwrap();
+        write_idx_entry(
+            &mut f1,
+            &IndexEntry {
+                group: 0,
+                item_number: 0,
+                bucket_value: 100,
+            },
+        )
+        .unwrap();
+
+        let mut f2 = File::create(idx_file_path(&basename2, 0)).unwrap();
+        write_idx_header(&mut f2).unwrap();
+        write_idx_entry(
+            &mut f2,
+            &IndexEntry {
+                group: 0,
+                item_number: 5, // out of bounds: group2 only has 1 flag
+                bucket_value: 100,
+            },
+        )
+        .unwrap();
+
+        let sources = vec![
+            MergeSource {
+                basename: basename1,
+                doc_count: 1,
+            },
+            MergeSource {
+                basename: basename2,
+                doc_count: 1,
+            },
+        ];
+
+        let err = merge_groups(&sources, 0, 0, false).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::InvalidFormat { .. }),
+            "expected InvalidFormat for out-of-range item_number, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_merge_three_groups_forward_keeps_first() {
+        let dir = TempDir::new().unwrap();
+        let same_text = "this exact document appears in all three groups here";
+        let (basename1, _) = create_hash_and_dedup(dir.path(), "group1", &[same_text]);
+        let (basename2, _) = create_hash_and_dedup(dir.path(), "group2", &[same_text]);
+        let (basename3, _) = create_hash_and_dedup(dir.path(), "group3", &[same_text]);
+
+        let sources = vec![
+            MergeSource {
+                basename: basename1.clone(),
+                doc_count: 1,
+            },
+            MergeSource {
+                basename: basename2.clone(),
+                doc_count: 1,
+            },
+            MergeSource {
+                basename: basename3.clone(),
+                doc_count: 1,
+            },
+        ];
+
+        merge_groups(&sources, 0, 255, false).unwrap();
+
+        let read = |b: &str| {
+            read_dup_flags(&mut File::open(format!("{}.dup.merge", b)).unwrap()).unwrap()[0]
+        };
+        // forward: the first group is kept, the rest marked duplicate.
+        assert_eq!(read(&basename1), FLAG_UNIQUE);
+        assert_eq!(read(&basename2), FLAG_DUPLICATE);
+        assert_eq!(read(&basename3), FLAG_DUPLICATE);
+    }
+
+    #[test]
+    fn test_merge_three_groups_reverse_keeps_last() {
+        let dir = TempDir::new().unwrap();
+        let same_text = "this exact document appears in all three groups here";
+        let (basename1, _) = create_hash_and_dedup(dir.path(), "group1", &[same_text]);
+        let (basename2, _) = create_hash_and_dedup(dir.path(), "group2", &[same_text]);
+        let (basename3, _) = create_hash_and_dedup(dir.path(), "group3", &[same_text]);
+
+        let sources = vec![
+            MergeSource {
+                basename: basename1.clone(),
+                doc_count: 1,
+            },
+            MergeSource {
+                basename: basename2.clone(),
+                doc_count: 1,
+            },
+            MergeSource {
+                basename: basename3.clone(),
+                doc_count: 1,
+            },
+        ];
+
+        merge_groups(&sources, 0, 255, true).unwrap();
+
+        let read = |b: &str| {
+            read_dup_flags(&mut File::open(format!("{}.dup.merge", b)).unwrap()).unwrap()[0]
+        };
+        // reverse: the last group is kept, earlier ones marked duplicate.
+        assert_eq!(read(&basename1), FLAG_DUPLICATE);
+        assert_eq!(read(&basename2), FLAG_DUPLICATE);
+        assert_eq!(read(&basename3), FLAG_UNIQUE);
     }
 }
