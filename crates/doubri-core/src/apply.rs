@@ -243,4 +243,23 @@ mod tests {
         .unwrap();
         assert_eq!(count, 2);
     }
+
+    #[test]
+    fn test_apply_each_empty_lines_do_not_consume_flags() {
+        // Empty lines are not documents, so they must not advance the flag index:
+        // doc_a uses flags[1] (duplicate), doc_b uses flags[2] (unique).
+        let jsonl = "{\"text\":\"doc_a\"}\n\n{\"text\":\"doc_b\"}\n";
+        let flags = vec![FLAG_UNIQUE, FLAG_DUPLICATE, FLAG_UNIQUE];
+        let mut output = Vec::new();
+        let count = apply_each(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            &flags,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(String::from_utf8(output).unwrap(), "{\"text\":\"doc_b\"}\n");
+    }
 }

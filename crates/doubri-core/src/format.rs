@@ -156,13 +156,11 @@ pub fn read_src_file<R: Read>(reader: &mut R) -> Result<Vec<SourceEntry>, Doubri
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(2, '\t');
-        let count_str = parts.next().ok_or_else(|| DoubriError::InvalidFormat {
-            msg: "missing item count in .src file".to_string(),
-        })?;
-        let path = parts.next().ok_or_else(|| DoubriError::InvalidFormat {
-            msg: "missing file path in .src file".to_string(),
-        })?;
+        let (count_str, path) =
+            line.split_once('\t')
+                .ok_or_else(|| DoubriError::InvalidFormat {
+                    msg: "missing file path in .src file".to_string(),
+                })?;
         let item_count = count_str
             .parse::<u64>()
             .map_err(|e| DoubriError::InvalidFormat {
@@ -576,5 +574,24 @@ mod tests {
         };
         let mut cursor = Cursor::new(vec![0u8; 3 * 8 + 4]);
         assert!(read_hash_rows(&mut cursor, &header, 2).is_err());
+    }
+
+    #[test]
+    fn test_read_src_file_skips_empty_lines() {
+        let input = b"1\ta.hash\n\n2\tdir/b.hash\n\n";
+        let entries = read_src_file(&mut Cursor::new(&input[..])).unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                SourceEntry {
+                    item_count: 1,
+                    file_path: "a.hash".to_string(),
+                },
+                SourceEntry {
+                    item_count: 2,
+                    file_path: "dir/b.hash".to_string(),
+                },
+            ]
+        );
     }
 }
