@@ -237,4 +237,44 @@ mod tests {
             err
         );
     }
+
+    #[test]
+    fn test_pairwise_similarity_non_string_id_uses_json_representation() {
+        let jsonl = r#"{"id":42,"text":"hello world foo bar"}
+{"id":"doc-b","text":"hello world foo bar"}
+"#;
+        let mut output = Vec::new();
+        let count = compute_pairwise_similarity(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            3,
+            0.5,
+            "id",
+            "text",
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        // A numeric id is printed as its JSON text, a string id without quotes.
+        assert_eq!(String::from_utf8(output).unwrap(), "1.000000\t42\tdoc-b\n");
+    }
+
+    #[test]
+    fn test_pairwise_similarity_empty_lines_do_not_shift_fallback_ids() {
+        // The empty line is not a document, so the fallback ids stay "0" and "1".
+        let jsonl = "{\"text\":\"hello world foo bar\"}\n\n{\"text\":\"hello world foo bar\"}\n";
+        let mut output = Vec::new();
+        let count = compute_pairwise_similarity(
+            std::io::BufReader::new(jsonl.as_bytes()),
+            &mut output,
+            3,
+            0.5,
+            "id",
+            "text",
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(String::from_utf8(output).unwrap(), "1.000000\t0\t1\n");
+    }
 }

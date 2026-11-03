@@ -577,6 +577,63 @@ mod tests {
     }
 
     #[test]
+    fn test_chunked_processing_reports_read_errors_after_valid_lines() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        // Invalid UTF-8 makes `lines()` fail with a read error after two valid lines.
+        let mut input = b"{\"text\":\"ok one\"}\n{\"text\":\"ok two\"}\n".to_vec();
+        input.extend_from_slice(b"\xff\xfe\n");
+
+        for chunk_size in [1, 2, 100] {
+            let mut output = Vec::new();
+            let err = process_jsonl_chunked(
+                std::io::BufReader::new(input.as_slice()),
+                &mut output,
+                &config,
+                "text",
+                chunk_size,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, DoubriError::Io(_)),
+                "chunk_size {chunk_size}: expected Io error, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_chunked_processing_reports_an_earlier_parse_error_before_a_later_read_error() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        // Line 2 is malformed JSON and line 3 is a read error. Both land in one chunk
+        // for large chunk sizes; the earlier parse error must still be the one reported.
+        let mut input = b"{\"text\":\"ok one\"}\n{broken\n".to_vec();
+        input.extend_from_slice(b"\xff\xfe\n");
+
+        for chunk_size in [1, 2, 100] {
+            let mut output = Vec::new();
+            let err = process_jsonl_chunked(
+                std::io::BufReader::new(input.as_slice()),
+                &mut output,
+                &config,
+                "text",
+                chunk_size,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, DoubriError::Json(_)),
+                "chunk_size {chunk_size}: expected Json error from line 2, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_bucket_value_hashes_the_requested_band_with_xxh3() {
         let config = MinHashConfig {
             ngram_size: 3,
