@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::io::{BufRead, Write};
 
+use rayon::prelude::*;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::error::DoubriError;
@@ -97,34 +98,71 @@ pub fn signature_slice(signatures: &[u64], doc_idx: usize, total_hashes: usize) 
     &signatures[start..start + total_hashes]
 }
 
+/// Number of JSONL lines read before their signatures are computed in parallel.
+const JSONL_CHUNK_SIZE: usize = 1024;
+
 /// Reads a JSONL stream, computes MinHash signatures, and writes them to a hash file.
 ///
 /// Each line must be a JSON object with a text field specified by `text_field`.
+/// Signatures are computed in parallel; the output order matches the input order.
 pub fn process_jsonl<R: BufRead, W: Write>(
     reader: R,
     writer: &mut W,
     config: &MinHashConfig,
     text_field: &str,
 ) -> Result<u64, DoubriError> {
+    process_jsonl_chunked(reader, writer, config, text_field, JSONL_CHUNK_SIZE)
+}
+
+/// Like [`process_jsonl`], but with an explicit number of non-empty lines per parallel chunk.
+fn process_jsonl_chunked<R: BufRead, W: Write>(
+    reader: R,
+    writer: &mut W,
+    config: &MinHashConfig,
+    text_field: &str,
+    chunk_size: usize,
+) -> Result<u64, DoubriError> {
+    let chunk_size = chunk_size.max(1);
     let total_hashes = config.total_hashes();
     let mut signatures: Vec<u64> = Vec::new();
     let mut num_documents = 0u64;
 
-    for line in reader.lines() {
-        let line = line?;
-        if line.is_empty() {
-            continue;
+    let mut lines = reader.lines();
+    let mut chunk: Vec<String> = Vec::with_capacity(chunk_size);
+    loop {
+        chunk.clear();
+        // A read error is deferred until the lines read before it have been processed,
+        // so that an earlier malformed line is still reported first.
+        let mut read_error = None;
+        while chunk.len() < chunk_size {
+            match lines.next() {
+                Some(Ok(line)) if line.is_empty() => {}
+                Some(Ok(line)) => chunk.push(line),
+                Some(Err(e)) => {
+                    read_error = Some(e);
+                    break;
+                }
+                None => break,
+            }
         }
-        let json: serde_json::Value = serde_json::from_str(&line)?;
-        let text = json
-            .get(text_field)
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DoubriError::MissingField {
-                field: text_field.to_string(),
-            })?;
-        let sig = compute_minhash(text, config);
-        signatures.extend_from_slice(&sig);
-        num_documents += 1;
+        if chunk.is_empty() && read_error.is_none() {
+            break;
+        }
+
+        // Collect every result and scan in order: rayon's `collect::<Result<..>>` does not
+        // guarantee that the earliest error in input order is the one returned.
+        let results: Vec<Result<Vec<u64>, DoubriError>> = chunk
+            .par_iter()
+            .map(|line| signature_for_line(line, config, text_field))
+            .collect();
+        for result in results {
+            signatures.extend_from_slice(&result?);
+            num_documents += 1;
+        }
+
+        if let Some(e) = read_error {
+            return Err(e.into());
+        }
     }
 
     let header = HashFileHeader {
@@ -138,6 +176,21 @@ pub fn process_jsonl<R: BufRead, W: Write>(
     write_hash_data(writer, &signatures, num_documents as usize, total_hashes)?;
 
     Ok(num_documents)
+}
+
+fn signature_for_line(
+    line: &str,
+    config: &MinHashConfig,
+    text_field: &str,
+) -> Result<Vec<u64>, DoubriError> {
+    let json: serde_json::Value = serde_json::from_str(line)?;
+    let text = json
+        .get(text_field)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| DoubriError::MissingField {
+            field: text_field.to_string(),
+        })?;
+    Ok(compute_minhash(text, config))
 }
 
 #[cfg(test)]
@@ -419,6 +472,89 @@ mod tests {
         )
         .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_chunked_processing_preserves_document_order_across_chunk_boundaries() {
+        use crate::format::{read_hash_data, read_hash_header};
+        use std::io::Cursor;
+
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        let total_hashes = config.total_hashes();
+        let texts = [
+            "alpha beta",
+            "gamma delta",
+            "epsilon zeta",
+            "eta theta",
+            "iota kappa",
+            "lambda mu",
+            "nu xi omicron",
+        ];
+        // Empty lines are interleaved so they also fall on chunk boundaries.
+        let mut jsonl = String::new();
+        for (i, t) in texts.iter().enumerate() {
+            jsonl.push_str(&format!("{{\"text\":\"{t}\"}}\n"));
+            if i % 2 == 1 {
+                jsonl.push('\n');
+            }
+        }
+
+        // 1: every document is its own chunk; 3: boundary mid-input; 100: single chunk.
+        for chunk_size in [1, 3, 7, 100] {
+            let mut output = Vec::new();
+            let count = process_jsonl_chunked(
+                std::io::BufReader::new(jsonl.as_bytes()),
+                &mut output,
+                &config,
+                "text",
+                chunk_size,
+            )
+            .unwrap();
+            assert_eq!(count, texts.len() as u64, "chunk_size {chunk_size}");
+
+            let mut cursor = Cursor::new(&output);
+            let header = read_hash_header(&mut cursor).unwrap();
+            let sigs = read_hash_data(&mut cursor, &header).unwrap();
+            for (i, t) in texts.iter().enumerate() {
+                assert_eq!(
+                    &sigs[i * total_hashes..(i + 1) * total_hashes],
+                    &compute_minhash(t, &config)[..],
+                    "document {i} with chunk_size {chunk_size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_chunked_processing_reports_the_earliest_error_within_a_chunk() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        // Line 2 is malformed JSON, line 5 lacks the text field. Both share one chunk,
+        // so the earliest failure (line 2) must be the one reported.
+        let jsonl = "{\"text\":\"ok one\"}\n{broken\n{\"text\":\"ok two\"}\n{\"text\":\"ok three\"}\n{\"other\":\"x\"}\n";
+
+        for chunk_size in [1, 4, 100] {
+            let mut output = Vec::new();
+            let err = process_jsonl_chunked(
+                std::io::BufReader::new(jsonl.as_bytes()),
+                &mut output,
+                &config,
+                "text",
+                chunk_size,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, DoubriError::Json(_)),
+                "chunk_size {chunk_size}: expected Json error from line 2, got {err:?}"
+            );
+        }
     }
 
     #[test]
