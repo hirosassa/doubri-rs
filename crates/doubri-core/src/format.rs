@@ -489,4 +489,35 @@ mod tests {
         let read_sigs = read_hash_data(&mut cursor, &header).unwrap();
         assert!(read_sigs.is_empty());
     }
+
+    #[test]
+    fn test_read_idx_entry_propagates_non_eof_io_error() {
+        struct BrokenReader;
+        impl Read for BrokenReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "denied",
+                ))
+            }
+        }
+
+        let err = read_idx_entry(&mut BrokenReader).unwrap_err();
+        assert!(
+            matches!(&err, DoubriError::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied),
+            "expected PermissionDenied Io error, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_read_idx_header_rejects_invalid_magic() {
+        let mut cursor = Cursor::new(b"NOTANIDX".to_vec());
+        let err = read_idx_header(&mut cursor).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::InvalidFormat { .. }),
+            "got {:?}",
+            err
+        );
+    }
 }

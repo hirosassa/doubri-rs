@@ -29,11 +29,15 @@ pub fn run(args: DedupArgs) -> Result<()> {
     let result =
         dedup_group(&paths, &args.basename, args.reverse).context("deduplication failed")?;
 
+    // An empty input has no duplicates; avoid printing NaN for 0 / 0
+    let percent = if result.total_documents == 0 {
+        0.0
+    } else {
+        result.duplicate_count as f64 / result.total_documents as f64 * 100.0
+    };
     eprintln!(
         "Total: {} documents, {} duplicates ({:.1}%)",
-        result.total_documents,
-        result.duplicate_count,
-        result.duplicate_count as f64 / result.total_documents as f64 * 100.0
+        result.total_documents, result.duplicate_count, percent
     );
     Ok(())
 }

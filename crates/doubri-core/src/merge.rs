@@ -391,4 +391,46 @@ mod tests {
         assert_eq!(read(&basename2), FLAG_DUPLICATE);
         assert_eq!(read(&basename3), FLAG_UNIQUE);
     }
+
+    #[test]
+    fn test_merge_ignores_same_bucket_value_within_a_single_group() {
+        use crate::format::{
+            FLAG_UNIQUE, IndexEntry, read_dup_flags, write_dup_flags, write_idx_entry,
+            write_idx_header,
+        };
+
+        let dir = TempDir::new().unwrap();
+        let basename = dir.path().join("g").to_string_lossy().to_string();
+
+        write_dup_flags(
+            &mut File::create(format!("{basename}.dup")).unwrap(),
+            &[FLAG_UNIQUE, FLAG_UNIQUE],
+        )
+        .unwrap();
+
+        // Two entries of the same group share a bucket value (e.g. a hash collision
+        // between different buckets); merge only reports cross-group duplicates.
+        let mut idx = File::create(idx_file_path(&basename, 0)).unwrap();
+        write_idx_header(&mut idx).unwrap();
+        for item_number in 0..2 {
+            let entry = IndexEntry {
+                group: 0,
+                item_number,
+                bucket_value: 42,
+            };
+            write_idx_entry(&mut idx, &entry).unwrap();
+        }
+        drop(idx);
+
+        let sources = [MergeSource {
+            basename: basename.clone(),
+            doc_count: 2,
+        }];
+        let result = merge_groups(&sources, 0, 0, false).unwrap();
+
+        let flags =
+            read_dup_flags(&mut File::open(format!("{basename}.dup.merge")).unwrap()).unwrap();
+        assert_eq!(result.cross_duplicates, 0);
+        assert_eq!(flags, vec![FLAG_UNIQUE, FLAG_UNIQUE]);
+    }
 }

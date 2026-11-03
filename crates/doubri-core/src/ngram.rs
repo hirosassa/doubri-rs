@@ -170,4 +170,10 @@ mod tests {
         let result: Vec<&str> = char_ngrams("aあb", 2).collect();
         assert_eq!(result, vec!["aあ", "あb"]);
     }
+
+    #[test]
+    fn test_unicode_text_exactly_ngram_size_yields_one_ngram() {
+        let result: Vec<&str> = char_ngrams("あいうえお", 5).collect();
+        assert_eq!(result, vec!["あいうえお"]);
+    }
 }
