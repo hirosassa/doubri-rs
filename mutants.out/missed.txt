@@ -1,0 +1,4 @@
+crates/doubri-core/src/merge.rs:76:17: replace < with <= in merge_groups
+crates/doubri-core/src/merge.rs:77:27: replace + with * in merge_groups
+crates/doubri-core/src/merge.rs:85:22: replace > with >= in merge_groups
+crates/doubri-core/src/merge.rs:85:18: replace - with + in merge_groups

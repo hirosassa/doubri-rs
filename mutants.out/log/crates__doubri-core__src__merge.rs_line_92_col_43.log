@@ -1,0 +1,309 @@
+
+*** crates/doubri-core/src/merge.rs:92:43: replace - with + in merge_groups
+
+*** mutation diff:
+--- crates/doubri-core/src/merge.rs
++++ replace - with + in merge_groups
+@@ -84,17 +84,17 @@
+             // all_entries[i..j] share the same bucket value
+             if j - i > 1 {
+                 // Check if entries come from different groups
+                 let first_group = all_entries[i].0;
+                 let has_cross_group = all_entries[i..j].iter().any(|(g, _)| *g != first_group);
+ 
+                 if has_cross_group {
+                     let mark_range = if reverse {
+-                        &all_entries[i..j - 1]
++                        &all_entries[i..j + /* ~ changed by cargo-mutants ~ */ 1]
+                     } else {
+                         &all_entries[i + 1..j]
+                     };
+                     for (group_idx, entry) in mark_range {
+                         let idx = entry.item_number as usize;
+                         let flags = &mut group_flags[*group_idx];
+                         if idx >= flags.len() {
+                             return Err(DoubriError::InvalidFormat {
+
+
+*** /Users/sasakawa/.rustup/toolchains/1.99.1-aarch64-apple-darwin/bin/cargo test --no-run --verbose --package=doubri-core@0.1.3
+       Fresh unicode-ident v1.0.24
+       Fresh cfg-if v1.0.4
+       Fresh rand_core v0.10.1
+       Fresh autocfg v1.5.0
+       Fresh either v1.15.0
+       Fresh shlex v1.3.0
+       Fresh proc-macro2 v1.0.106
+       Fresh find-msvc-tools v0.1.9
+       Fresh bitflags v2.11.1
+       Fresh memchr v2.8.0
+       Fresh itoa v1.0.18
+       Fresh quote v1.0.45
+       Fresh libc v0.2.186
+       Fresh crossbeam-utils v0.8.21
+       Fresh serde_core v1.0.228
+       Fresh cc v1.2.62
+       Fresh zmij v1.0.21
+       Fresh regex-syntax v0.8.10
+       Fresh plotters-backend v0.3.7
+       Fresh clap_lex v1.1.0
+       Fresh anstyle v1.0.14
+       Fresh ciborium-io v0.2.2
+       Fresh once_cell v1.21.4
+       Fresh fastrand v2.4.1
+       Fresh itertools v0.13.0
+       Fresh syn v2.0.117
+       Fresh crossbeam-epoch v0.9.18
+       Fresh errno v0.3.14
+       Fresh getrandom v0.4.2
+       Fresh num-traits v0.2.19
+       Fresh serde_json v1.0.149
+       Fresh regex-automata v0.4.14
+       Fresh plotters-svg v0.3.7
+       Fresh clap_builder v4.6.0
+       Fresh wait-timeout v0.2.1
+       Fresh fnv v1.0.7
+       Fresh bit-vec v0.10.1
+       Fresh cast v0.3.0
+       Fresh quick-error v1.2.3
+       Fresh same-file v1.0.6
+       Fresh serde_derive v1.0.228
+       Fresh zerocopy-derive v0.8.48
+       Fresh crossbeam-deque v0.8.6
+       Fresh rustix v1.1.4
+       Fresh thiserror-impl v2.0.18
+       Fresh bit-set v0.11.1
+       Fresh regex v1.12.3
+       Fresh walkdir v2.5.0
+       Fresh plotters v0.3.7
+       Fresh clap v4.6.1
+       Fresh criterion-plot v0.8.2
+       Fresh rand v0.10.3
+       Fresh page_size v0.6.0
+       Fresh rand_xorshift v0.5.0
+       Fresh chacha20 v0.10.2
+       Fresh byteorder v1.5.0
+       Fresh serde v1.0.228
+       Fresh zerocopy v0.8.48
+       Fresh rayon-core v1.13.0
+       Fresh tempfile v3.27.0
+       Fresh thiserror v2.0.18
+       Fresh alloca v0.4.0
+       Fresh xxhash-rust v0.8.15
+       Fresh unarray v0.1.4
+       Fresh oorandom v11.1.5
+       Fresh anes v0.1.6
+       Fresh core_detect v1.0.0
+       Fresh half v2.7.1
+       Fresh rayon v1.12.0
+       Fresh rusty-fork v0.3.1
+       Fresh tinytemplate v1.2.1
+       Fresh ciborium-ll v0.2.2
+       Fresh proptest v1.12.0
+       Dirty doubri-core v0.1.3 (/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/crates/doubri-core): the file `crates/doubri-core/src/merge.rs` has changed (1793675774.998626173s, 1s after last build at 1793675773.794215031s)
+   Compiling doubri-core v0.1.3 (/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/crates/doubri-core)
+       Fresh ciborium v0.2.2
+       Fresh criterion v0.8.2
+     Running `/Users/sasakawa/.rustup/toolchains/1.99.1-aarch64-apple-darwin/bin/rustc --crate-name doubri_core --edition=2024 crates/doubri-core/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=ecc9639885522f89 -C extra-filename=-9dc3008539be6379 --out-dir /private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps -C incremental=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/incremental -L dependency=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps --extern byteorder=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libbyteorder-f1c054eb6cdd7d34.rlib --extern criterion=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libcriterion-bb5e2ab85d8fefe1.rlib --extern proptest=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libproptest-f74fda71e52af80f.rlib --extern rayon=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/librayon-34e90491a2def403.rlib --extern serde=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libserde-ee15a6209264c3e2.rlib --extern serde_json=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libserde_json-171d2ed5f50f6e01.rlib --extern tempfile=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libtempfile-0e6073b919e63f43.rlib --extern thiserror=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libthiserror-47d46fb6311c1606.rlib --extern xxhash_rust=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libxxhash_rust-73433634a824d94e.rlib -L native=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/build/alloca-b333d8025cb48cde/out`
+     Running `/Users/sasakawa/.rustup/toolchains/1.99.1-aarch64-apple-darwin/bin/rustc --crate-name doubri_core --edition=2024 crates/doubri-core/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=7cbd5c8d304706b0 -C extra-filename=-8b981707855e7cc0 --out-dir /private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps -C incremental=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/incremental -L dependency=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps --extern byteorder=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libbyteorder-f1c054eb6cdd7d34.rmeta --extern rayon=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/librayon-34e90491a2def403.rmeta --extern serde=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libserde-ee15a6209264c3e2.rmeta --extern serde_json=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libserde_json-171d2ed5f50f6e01.rmeta --extern thiserror=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libthiserror-47d46fb6311c1606.rmeta --extern xxhash_rust=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libxxhash_rust-73433634a824d94e.rmeta`
+     Running `/Users/sasakawa/.rustup/toolchains/1.99.1-aarch64-apple-darwin/bin/rustc --crate-name dedup_model --edition=2024 crates/doubri-core/tests/dedup_model.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=0fb84df17598d0e9 -C extra-filename=-4e6edc47a99f8e7c --out-dir /private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps -C incremental=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/incremental -L dependency=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps --extern byteorder=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libbyteorder-f1c054eb6cdd7d34.rlib --extern criterion=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libcriterion-bb5e2ab85d8fefe1.rlib --extern doubri_core=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libdoubri_core-8b981707855e7cc0.rlib --extern proptest=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libproptest-f74fda71e52af80f.rlib --extern rayon=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/librayon-34e90491a2def403.rlib --extern serde=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libserde-ee15a6209264c3e2.rlib --extern serde_json=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libserde_json-171d2ed5f50f6e01.rlib --extern tempfile=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libtempfile-0e6073b919e63f43.rlib --extern thiserror=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libthiserror-47d46fb6311c1606.rlib --extern xxhash_rust=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/libxxhash_rust-73433634a824d94e.rlib -L native=/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/build/alloca-b333d8025cb48cde/out`
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+  Executable `/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/doubri_core-9dc3008539be6379`
+  Executable `/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/dedup_model-4e6edc47a99f8e7c`
+
+*** result: Success
+
+*** /Users/sasakawa/.rustup/toolchains/1.99.1-aarch64-apple-darwin/bin/cargo test --verbose --package=doubri-core@0.1.3
+       Fresh unicode-ident v1.0.24
+       Fresh cfg-if v1.0.4
+       Fresh rand_core v0.10.1
+       Fresh autocfg v1.5.0
+       Fresh shlex v1.3.0
+       Fresh find-msvc-tools v0.1.9
+       Fresh proc-macro2 v1.0.106
+       Fresh either v1.15.0
+       Fresh cc v1.2.62
+       Fresh bitflags v2.11.1
+       Fresh memchr v2.8.0
+       Fresh quote v1.0.45
+       Fresh libc v0.2.186
+       Fresh crossbeam-utils v0.8.21
+       Fresh serde_core v1.0.228
+       Fresh zmij v1.0.21
+       Fresh itoa v1.0.18
+       Fresh regex-syntax v0.8.10
+       Fresh ciborium-io v0.2.2
+       Fresh plotters-backend v0.3.7
+       Fresh clap_lex v1.1.0
+       Fresh anstyle v1.0.14
+       Fresh once_cell v1.21.4
+       Fresh fastrand v2.4.1
+       Fresh syn v2.0.117
+       Fresh crossbeam-epoch v0.9.18
+       Fresh getrandom v0.4.2
+       Fresh errno v0.3.14
+       Fresh serde_json v1.0.149
+       Fresh num-traits v0.2.19
+       Fresh regex-automata v0.4.14
+       Fresh plotters-svg v0.3.7
+       Fresh clap_builder v4.6.0
+       Fresh wait-timeout v0.2.1
+       Fresh itertools v0.13.0
+       Fresh bit-vec v0.10.1
+       Fresh cast v0.3.0
+       Fresh quick-error v1.2.3
+       Fresh fnv v1.0.7
+       Fresh zerocopy-derive v0.8.48
+       Fresh serde_derive v1.0.228
+       Fresh crossbeam-deque v0.8.6
+       Fresh rustix v1.1.4
+       Fresh thiserror-impl v2.0.18
+       Fresh same-file v1.0.6
+       Fresh rand v0.10.3
+       Fresh bit-set v0.11.1
+       Fresh regex v1.12.3
+       Fresh alloca v0.4.0
+       Fresh plotters v0.3.7
+       Fresh criterion-plot v0.8.2
+       Fresh clap v4.6.1
+       Fresh page_size v0.6.0
+       Fresh chacha20 v0.10.2
+       Fresh rand_xorshift v0.5.0
+       Fresh core_detect v1.0.0
+       Fresh zerocopy v0.8.48
+       Fresh serde v1.0.228
+       Fresh rayon-core v1.13.0
+       Fresh tempfile v3.27.0
+       Fresh thiserror v2.0.18
+       Fresh walkdir v2.5.0
+       Fresh anes v0.1.6
+       Fresh xxhash-rust v0.8.15
+       Fresh byteorder v1.5.0
+       Fresh unarray v0.1.4
+       Fresh oorandom v11.1.5
+       Fresh half v2.7.1
+       Fresh rayon v1.12.0
+       Fresh rusty-fork v0.3.1
+       Fresh tinytemplate v1.2.1
+       Fresh ciborium-ll v0.2.2
+       Fresh proptest v1.12.0
+       Fresh ciborium v0.2.2
+       Fresh criterion v0.8.2
+       Fresh doubri-core v0.1.3 (/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/crates/doubri-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running `/private/var/folders/lt/mx67ckwn2nzcykfs5lj0ywg80000gq/T/cargo-mutants-doubri-rs-IbZkcj.tmp/target/debug/deps/doubri_core-9dc3008539be6379`
+
+running 90 tests
+test apply::tests::test_apply_whole_empty_lines_skipped ... ok
+test apply::tests::test_apply_each_flag_index_out_of_bounds ... ok
+test apply::tests::test_apply_whole_with_duplicates ... ok
+test apply::tests::test_apply_whole_all_unique ... ok
+test apply::tests::test_apply_each_offset_zero ... ok
+test apply::tests::test_apply_whole_all_duplicates ... ok
+test apply::tests::test_apply_each_basic ... ok
+test apply::tests::test_apply_whole_more_docs_than_flags ... ok
+test dedup::tests::test_dedup_empty_input ... ok
+test format::tests::test_dup_flags_roundtrip ... ok
+test dedup::tests::test_read_hash_file_list ... ok
+test format::tests::test_hash_data_roundtrip_zero_docs ... ok
+test format::tests::test_hash_data_roundtrip ... ok
+test format::tests::test_hash_header_invalid_magic ... ok
+test format::tests::test_hash_header_roundtrip ... ok
+test format::tests::test_idx_entry_eof ... ok
+test format::tests::test_idx_entry_roundtrip ... ok
+test format::tests::test_idx_file_path ... ok
+test format::tests::test_multiple_idx_entries_roundtrip ... ok
+test format::tests::test_read_hash_data_truncated ... ok
+test format::tests::test_read_hash_header_truncated_after_magic ... ok
+test format::tests::test_hash_file_with_tempfile ... ok
+test dedup::tests::test_dedup_config_mismatch ... ok
+test format::tests::test_read_idx_entry_partial_is_error ... ok
+test format::tests::test_read_idx_entry_propagates_non_eof_io_error ... ok
+test format::tests::test_read_idx_header_rejects_invalid_magic ... ok
+test format::tests::test_read_src_file_missing_tab ... ok
+test format::tests::test_read_src_file_non_numeric_count ... ok
+test format::tests::test_src_file_roundtrip ... ok
+test hash::tests::test_deterministic ... ok
+test hash::tests::test_different_inputs_produce_different_hashes ... ok
+test hash::tests::test_different_seeds_produce_different_hashes ... ok
+test hash::tests::test_empty_input ... ok
+test hash::tests::test_known_value_seed_0 ... ok
+test hash::tests::test_unicode_bytes ... ok
+test minhash::tests::test_bucket_value_deterministic ... ok
+test minhash::tests::test_bucket_value_hashes_the_requested_band_with_xxh3 ... ok
+test dedup::tests::test_dedup_writes_src_file ... ok
+test merge::tests::test_merge_ignores_same_bucket_value_within_a_single_group ... ok
+test minhash::tests::test_default_config ... ok
+test minhash::tests::test_different_buckets_different_values ... ok
+test minhash::tests::test_identical_texts_produce_identical_signatures ... ok
+test minhash::tests::test_different_texts_produce_different_signatures ... ok
+test minhash::tests::test_process_jsonl_custom_field ... ok
+test minhash::tests::test_process_jsonl_basic ... ok
+test merge::tests::test_merge_item_number_out_of_bounds ... ok
+test minhash::tests::test_process_jsonl_non_string_field ... ok
+test minhash::tests::test_process_jsonl_invalid_json ... ok
+test minhash::tests::test_process_jsonl_missing_field ... ok
+test minhash::tests::test_process_jsonl_empty_lines_skipped ... ok
+test minhash::tests::test_short_text_returns_max_values ... ok
+test minhash::tests::test_unicode_minhash ... ok
+test minhash::tests::test_signature_length ... ok
+test minhash::tests::test_similar_texts_share_bucket_values ... ok
+test ngram::tests::test_5gram_default ... ok
+test ngram::tests::test_ascii_bigrams ... ok
+test ngram::tests::test_ascii_trigrams ... ok
+test ngram::tests::test_cjk_characters ... ok
+test ngram::tests::test_emoji ... ok
+test ngram::tests::test_empty_string ... ok
+test ngram::tests::test_mixed_ascii_and_unicode ... ok
+test ngram::tests::test_n_is_0 ... ok
+test ngram::tests::test_text_shorter_than_n ... ok
+test ngram::tests::test_unicode_text_exactly_ngram_size_yields_one_ngram ... ok
+test ngram::tests::test_n_is_1 ... ok
+test similarity::tests::test_completely_different_texts ... ok
+test similarity::tests::test_empty_texts ... ok
+test ngram::tests::test_text_equal_to_n ... ok
+test similarity::tests::test_identical_texts ... ok
+test similarity::tests::test_known_jaccard_value ... ok
+test similarity::tests::test_one_empty_text ... ok
+test similarity::tests::test_pairwise_similarity_high_threshold ... ok
+test similarity::tests::test_pairwise_similarity_invalid_json ... ok
+test similarity::tests::test_pairwise_similarity_missing_text_field ... ok
+test similarity::tests::test_partially_similar_texts ... ok
+test similarity::tests::test_unicode_jaccard ... ok
+test similarity::tests::test_pairwise_similarity_basic ... ok
+test similarity::tests::test_pairwise_similarity_id_fallback_to_index ... ok
+test dedup::tests::test_dedup_reverse_keeps_newer ... ok
+test dedup::tests::test_dedup_multiple_hash_files ... ok
+test merge::tests::test_merge_reverse ... FAILED
+test dedup::tests::test_dedup_three_identical_reverse_marks_all_but_last ... ok
+test dedup::tests::test_dedup_three_identical_forward_marks_all_but_first ... ok
+test dedup::tests::test_dedup_with_identical_documents ... ok
+test dedup::tests::test_dedup_index_files_content ... ok
+test merge::tests::test_merge_no_cross_duplicates ... ok
+test dedup::tests::test_dedup_no_duplicates ... ok
+test merge::tests::test_merge_with_cross_duplicates ... ok
+test merge::tests::test_merge_three_groups_reverse_keeps_last ... FAILED
+test merge::tests::test_merge_three_groups_forward_keeps_first ... ok
+
+failures:
+
+---- merge::tests::test_merge_reverse stdout ----
+
+thread 'merge::tests::test_merge_reverse' (9582596) panicked at crates/doubri-core/src/merge.rs:92:37:
+range end index 3 out of range for slice of length 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- merge::tests::test_merge_three_groups_reverse_keeps_last stdout ----
+
+thread 'merge::tests::test_merge_three_groups_reverse_keeps_last' (9582598) panicked at crates/doubri-core/src/merge.rs:92:37:
+range end index 4 out of range for slice of length 3
+
+
+failures:
+    merge::tests::test_merge_reverse
+    merge::tests::test_merge_three_groups_reverse_keeps_last
+
+test result: FAILED. 88 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p doubri-core --lib`
+
+*** result: Failure(101)

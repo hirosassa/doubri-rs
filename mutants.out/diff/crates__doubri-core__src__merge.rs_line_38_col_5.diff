@@ -1,0 +1,112 @@
+--- crates/doubri-core/src/merge.rs
++++ replace merge_groups -> Result<MergeResult, DoubriError> with Ok(Default::default())
+@@ -30,108 +30,17 @@
+ /// - `reverse`: if true, keeps documents from the newer group.
+ pub fn merge_groups(
+     sources: &[MergeSource],
+     start_split: u8,
+     end_split: u8,
+     reverse: bool,
+ ) -> Result<MergeResult, DoubriError> {
+     // Read dup flags for each group
+-    let mut group_flags: Vec<Vec<u8>> = Vec::new();
+-    for source in sources {
+-        let dup_path = format!("{}.dup", source.basename);
+-        let flags = read_dup_flags(&mut File::open(&dup_path)?)?;
+-        group_flags.push(flags);
+-    }
+-
+-    let mut cross_duplicates = 0u64;
+-
+-    // Merge across each split file
+-    for split_idx in start_split..=end_split {
+-        // Read index entries from each group
+-        let mut all_entries: Vec<(usize, IndexEntry)> = Vec::new(); // (group_idx, entry)
+-
+-        for (group_idx, source) in sources.iter().enumerate() {
+-            let path = idx_file_path(&source.basename, split_idx);
+-            if !Path::new(&path).exists() {
+-                continue;
+-            }
+-
+-            let mut reader = BufReader::new(File::open(&path)?);
+-            read_idx_header(&mut reader)?;
+-
+-            while let Some(entry) = read_idx_entry(&mut reader)? {
+-                all_entries.push((group_idx, entry));
+-            }
+-        }
+-
+-        // Sort by bucket value
+-        all_entries.sort_by(|a, b| {
+-            a.1.bucket_value
+-                .cmp(&b.1.bucket_value)
+-                .then(a.0.cmp(&b.0))
+-                .then(a.1.item_number.cmp(&b.1.item_number))
+-        });
+-
+-        // Detect cross-group duplicates with the same bucket value
+-        let mut i = 0;
+-        while i < all_entries.len() {
+-            let mut j = i + 1;
+-            while j < all_entries.len()
+-                && all_entries[j].1.bucket_value == all_entries[i].1.bucket_value
+-            {
+-                j += 1;
+-            }
+-
+-            // all_entries[i..j] share the same bucket value
+-            if j - i > 1 {
+-                // Check if entries come from different groups
+-                let first_group = all_entries[i].0;
+-                let has_cross_group = all_entries[i..j].iter().any(|(g, _)| *g != first_group);
+-
+-                if has_cross_group {
+-                    let mark_range = if reverse {
+-                        &all_entries[i..j - 1]
+-                    } else {
+-                        &all_entries[i + 1..j]
+-                    };
+-                    for (group_idx, entry) in mark_range {
+-                        let idx = entry.item_number as usize;
+-                        let flags = &mut group_flags[*group_idx];
+-                        if idx >= flags.len() {
+-                            return Err(DoubriError::InvalidFormat {
+-                                msg: format!(
+-                                    "item_number {} out of bounds for group {} (size {})",
+-                                    entry.item_number,
+-                                    group_idx,
+-                                    flags.len()
+-                                ),
+-                            });
+-                        }
+-                        // An item matches once per bucket; count it only the first time
+-                        if flags[idx] != FLAG_DUPLICATE {
+-                            flags[idx] = FLAG_DUPLICATE;
+-                            cross_duplicates += 1;
+-                        }
+-                    }
+-                }
+-            }
+-
+-            i = j;
+-        }
+-    }
+-
+-    // Write merged flags
+-    for (group_idx, source) in sources.iter().enumerate() {
+-        let merge_path = format!("{}.dup.merge", source.basename);
+-        let mut file = BufWriter::new(File::create(&merge_path)?);
+-        write_dup_flags(&mut file, &group_flags[group_idx])?;
+-    }
+-
+-    Ok(MergeResult { cross_duplicates })
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     use crate::dedup::dedup_group;
+     use crate::format::FLAG_UNIQUE;
+     use crate::minhash::{MinHashConfig, process_jsonl};

@@ -106,8 +106,11 @@ pub fn merge_groups(
                                 ),
                             });
                         }
-                        flags[idx] = FLAG_DUPLICATE;
-                        cross_duplicates += 1;
+                        // An item matches once per bucket; count it only the first time
+                        if flags[idx] != FLAG_DUPLICATE {
+                            flags[idx] = FLAG_DUPLICATE;
+                            cross_duplicates += 1;
+                        }
                     }
                 }
             }
@@ -217,10 +220,8 @@ mod tests {
 
         let result = merge_groups(&sources, 0, 255, false).unwrap();
 
-        assert!(
-            result.cross_duplicates > 0,
-            "identical docs across groups should be detected"
-        );
+        // One document is flagged once, even though it matches in every bucket
+        assert_eq!(result.cross_duplicates, 1);
 
         // group1 document is kept, group2 document is marked as duplicate
         let flags1 =
@@ -253,7 +254,7 @@ mod tests {
 
         let result = merge_groups(&sources, 0, 255, true).unwrap();
 
-        assert!(result.cross_duplicates > 0);
+        assert_eq!(result.cross_duplicates, 1);
 
         // reverse: keep group2, mark group1 as duplicate
         let flags1 =

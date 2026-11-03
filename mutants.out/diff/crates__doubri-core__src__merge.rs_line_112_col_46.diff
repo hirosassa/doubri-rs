@@ -1,0 +1,21 @@
+--- crates/doubri-core/src/merge.rs
++++ replace += with -= in merge_groups
+@@ -104,17 +104,17 @@
+                                     group_idx,
+                                     flags.len()
+                                 ),
+                             });
+                         }
+                         // An item matches once per bucket; count it only the first time
+                         if flags[idx] != FLAG_DUPLICATE {
+                             flags[idx] = FLAG_DUPLICATE;
+-                            cross_duplicates += 1;
++                            cross_duplicates -= /* ~ changed by cargo-mutants ~ */ 1;
+                         }
+                     }
+                 }
+             }
+ 
+             i = j;
+         }
+     }
