@@ -4,23 +4,11 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+*"
-  pull_request:
-    paths:
-      - ".github/workflows/release.yml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**"
-  workflow_dispatch:
 
 permissions: {}
 
-env:
-  # Only a tag push publishes; PRs and manual runs build and compress without uploading
-  PUBLISH: ${{ github.event_name == 'push' }}
-
 jobs:
   create-release:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -34,8 +22,6 @@ jobs:
 
   upload-assets:
     needs: create-release
-    # create-release is skipped outside tag pushes, which should still run the dry-run build
-    if: ${{ !cancelled() && needs.create-release.result != 'failure' }}
     permissions:
       contents: write
     strategy:
@@ -68,13 +54,12 @@ jobs:
           zip: windows
           checksum: sha256
           locked: true
-          dry-run: ${{ env.PUBLISH != 'true' }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   publish-homebrew-formula:
     needs: upload-assets
     # Skip prereleases (e.g. v1.0.0-rc.1)
-    if: ${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
