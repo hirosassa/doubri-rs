@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
@@ -100,17 +100,30 @@ pub fn dedup_group(
     let total_hashes = config.total_hashes();
     let mut dup_flags = vec![FLAG_UNIQUE; total_documents];
 
+    // Bucket values are needed both for duplicate detection and for the index
+    // files, so compute them once per bucket and keep them. This costs
+    // 8 bytes per document per bucket, far less than the signatures.
+    let bucket_values: Vec<Vec<u64>> = (0..config.num_buckets)
+        .map(|bucket_idx| {
+            (0..total_documents)
+                .into_par_iter()
+                .map(|i| {
+                    let sig = signature_slice(&all_signatures, i, total_hashes);
+                    bucket_value(sig, bucket_idx, &config)
+                })
+                .collect()
+        })
+        .collect();
+    drop(all_signatures);
+
     // Detect duplicates per bucket
-    for bucket_idx in 0..config.num_buckets {
-        // Compute bucket values
-        let mut entries: Vec<BucketEntry> = (0..total_documents)
-            .into_par_iter()
-            .map(|i| {
-                let sig = signature_slice(&all_signatures, i, total_hashes);
-                BucketEntry {
-                    bucket_value: bucket_value(sig, bucket_idx, &config),
-                    global_idx: i as u64,
-                }
+    for values in &bucket_values {
+        let mut entries: Vec<BucketEntry> = values
+            .iter()
+            .enumerate()
+            .map(|(i, &bucket_value)| BucketEntry {
+                bucket_value,
+                global_idx: i as u64,
             })
             .collect();
 
@@ -165,15 +178,7 @@ pub fn dedup_group(
 
     // Write .idx.* files (256-way split)
     // Distribute non-duplicate index entries across 256 files per bucket
-    write_index_files(
-        &all_signatures,
-        total_documents as usize,
-        total_hashes,
-        &doc_locations,
-        &dup_flags,
-        &config,
-        output_basename,
-    )?;
+    write_index_files(&bucket_values, &doc_locations, &dup_flags, output_basename)?;
 
     Ok(DedupResult {
         total_documents,
@@ -182,56 +187,53 @@ pub fn dedup_group(
 }
 
 /// Writes index files with 256-way split.
+///
+/// `bucket_values[bucket_idx][doc]` holds the precomputed bucket value of each
+/// document. Entries are appended per split in bucket order, then document order.
 fn write_index_files(
-    signatures: &[u64],
-    num_docs: usize,
-    total_hashes: usize,
+    bucket_values: &[Vec<u64>],
     doc_locations: &[DocLocation],
     dup_flags: &[u8],
-    config: &MinHashConfig,
     basename: &str,
 ) -> Result<(), DoubriError> {
-    for bucket_idx in 0..config.num_buckets {
-        // Build bucket_value -> split_idx -> entries mapping
-        let mut split_entries: Vec<Vec<IndexEntry>> = vec![Vec::new(); NUM_INDEX_SPLITS];
+    // Writers are opened lazily and kept open for the whole run.
+    let mut writers: Vec<Option<BufWriter<File>>> = (0..NUM_INDEX_SPLITS).map(|_| None).collect();
 
-        for i in 0..num_docs {
+    for values in bucket_values {
+        for (i, &bv) in values.iter().enumerate() {
             if dup_flags[i] == FLAG_DUPLICATE {
                 continue;
             }
-            let sig = signature_slice(signatures, i, total_hashes);
-            let bv = bucket_value(sig, bucket_idx, config);
             let split_idx = (bv as usize) % NUM_INDEX_SPLITS;
+            if writers[split_idx].is_none() {
+                let path = idx_file_path(basename, split_idx as u8);
+                let file_exists = Path::new(&path).exists();
+                let mut writer = BufWriter::new(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)?,
+                );
+                if !file_exists {
+                    write_idx_header(&mut writer)?;
+                }
+                writers[split_idx] = Some(writer);
+            }
             let loc = &doc_locations[i];
-            split_entries[split_idx].push(IndexEntry {
-                group: loc.source_idx,
-                item_number: loc.doc_idx,
-                bucket_value: bv,
-            });
+            let writer = writers[split_idx].as_mut().expect("writer opened above");
+            write_idx_entry(
+                writer,
+                &IndexEntry {
+                    group: loc.source_idx,
+                    item_number: loc.doc_idx,
+                    bucket_value: bv,
+                },
+            )?;
         }
+    }
 
-        // Write to each split file (append mode)
-        for (split_idx, entries) in split_entries.iter().enumerate() {
-            if entries.is_empty() {
-                continue;
-            }
-            let path = idx_file_path(basename, split_idx as u8);
-            let file_exists = Path::new(&path).exists();
-            let mut file = BufWriter::new(
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)?,
-            );
-
-            if !file_exists {
-                write_idx_header(&mut file)?;
-            }
-
-            for entry in entries {
-                write_idx_entry(&mut file, entry)?;
-            }
-        }
+    for writer in writers.iter_mut().flatten() {
+        writer.flush()?;
     }
 
     Ok(())
@@ -546,5 +548,97 @@ mod tests {
 
         // Every unique document contributes exactly one entry per bucket.
         assert_eq!(total_entries, unique_count * num_buckets);
+    }
+
+    #[test]
+    fn test_dedup_output_matches_independently_computed_expectation() {
+        use crate::format::{read_idx_entry, read_idx_header};
+        use std::collections::HashSet;
+
+        let dir = TempDir::new().unwrap();
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 3,
+            band_size: 2,
+        };
+        let texts_a = [
+            "the quick brown fox jumps over the lazy dog",
+            "completely different content for the second doc",
+            "the quick brown fox jumps over the lazy dog",
+            "yet another unique sentence about rust programming",
+        ];
+        let texts_b = [
+            "completely different content for the second doc",
+            "a fresh document that only appears in file b",
+            "yet another unique sentence about rust programming",
+        ];
+        let path_a = create_hash_file_with_config(dir.path(), "a.hash", &texts_a, &config);
+        let path_b = create_hash_file_with_config(dir.path(), "b.hash", &texts_b, &config);
+
+        // Independently compute every document's bucket values from the hash files.
+        let mut docs: Vec<(u32, u32, Vec<u64>)> = Vec::new();
+        for (source_idx, path) in [&path_a, &path_b].into_iter().enumerate() {
+            let mut file = BufReader::new(File::open(path).unwrap());
+            let header = read_hash_header(&mut file).unwrap();
+            let sigs = read_hash_data(&mut file, &header).unwrap();
+            for doc_idx in 0..header.num_documents as usize {
+                let sig = signature_slice(&sigs, doc_idx, config.total_hashes());
+                let bvs = (0..config.num_buckets)
+                    .map(|b| bucket_value(sig, b, &config))
+                    .collect();
+                docs.push((source_idx as u32, doc_idx as u32, bvs));
+            }
+        }
+
+        // Forward mode: a document is a duplicate if an earlier one shares any bucket value.
+        let mut seen: Vec<HashSet<u64>> = vec![HashSet::new(); config.num_buckets];
+        let mut expected_dup = Vec::new();
+        for (_, _, bvs) in &docs {
+            let is_dup = bvs.iter().enumerate().any(|(b, v)| seen[b].contains(v));
+            for (b, v) in bvs.iter().enumerate() {
+                seen[b].insert(*v);
+            }
+            expected_dup.push(is_dup);
+        }
+        assert!(expected_dup.iter().any(|&d| d), "test needs duplicates");
+        assert!(expected_dup.iter().any(|&d| !d), "test needs uniques");
+
+        let basename = dir.path().join("output").to_string_lossy().to_string();
+        dedup_group(&[path_a, path_b], &basename, false).unwrap();
+
+        let flags = read_dup_flags(&mut File::open(format!("{}.dup", basename)).unwrap()).unwrap();
+        let expected_flags: Vec<u8> = expected_dup
+            .iter()
+            .map(|&d| if d { FLAG_DUPLICATE } else { FLAG_UNIQUE })
+            .collect();
+        assert_eq!(flags, expected_flags);
+
+        // Index files: per split, entries ordered by bucket, then by document order.
+        for split_idx in 0..NUM_INDEX_SPLITS {
+            let mut expected: Vec<(u32, u32, u64)> = Vec::new();
+            for b in 0..config.num_buckets {
+                for (i, (group, item, bvs)) in docs.iter().enumerate() {
+                    if !expected_dup[i] && (bvs[b] as usize) % NUM_INDEX_SPLITS == split_idx {
+                        expected.push((*group, *item, bvs[b]));
+                    }
+                }
+            }
+
+            let path = idx_file_path(&basename, split_idx as u8);
+            if expected.is_empty() {
+                assert!(
+                    !Path::new(&path).exists(),
+                    "unexpected file for split {split_idx}"
+                );
+                continue;
+            }
+            let mut reader = BufReader::new(File::open(&path).unwrap());
+            read_idx_header(&mut reader).unwrap();
+            let mut actual = Vec::new();
+            while let Some(e) = read_idx_entry(&mut reader).unwrap() {
+                actual.push((e.group, e.item_number, e.bucket_value));
+            }
+            assert_eq!(actual, expected, "split {split_idx} differs");
+        }
     }
 }
