@@ -420,4 +420,25 @@ mod tests {
         .unwrap();
         assert_eq!(count, 2);
     }
+
+    #[test]
+    fn test_bucket_value_hashes_the_requested_band_with_xxh3() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 3,
+            band_size: 2,
+        };
+        let signature = [11u64, 22, 33, 44, 55, 66];
+
+        // Bucket values are persisted in index files, so the exact definition matters:
+        // xxh3 (seed 0) over the little-endian bytes of the band's hash values.
+        for (bucket_idx, band) in signature.chunks(config.band_size).enumerate() {
+            let bytes: Vec<u8> = band.iter().flat_map(|h| h.to_le_bytes()).collect();
+            assert_eq!(
+                bucket_value(&signature, bucket_idx, &config),
+                xxhash_rust::xxh3::xxh3_64_with_seed(&bytes, 0),
+                "bucket {bucket_idx}"
+            );
+        }
+    }
 }
