@@ -99,6 +99,23 @@ pub fn read_hash_data<R: Read>(
     Ok(signatures)
 }
 
+/// Reads the next `num_rows` hash-index rows from a hash file (hash-index-major layout).
+///
+/// The reader must be positioned at the start of a row (right after the header, or
+/// after a previous call). Returns `num_rows * num_documents` values: row `r`,
+/// document `d` is at index `r * num_documents + d`. Consecutive calls stream
+/// through the file, so a caller can process one band at a time without loading
+/// every signature.
+pub fn read_hash_rows<R: Read>(
+    reader: &mut R,
+    header: &HashFileHeader,
+    num_rows: usize,
+) -> Result<Vec<u64>, DoubriError> {
+    let mut values = vec![0u64; num_rows * header.num_documents as usize];
+    reader.read_u64_into::<LittleEndian>(&mut values)?;
+    Ok(values)
+}
+
 /// Writes a .dup flag file.
 pub fn write_dup_flags<W: Write>(writer: &mut W, flags: &[u8]) -> Result<(), DoubriError> {
     writer.write_all(flags)?;
@@ -519,5 +536,45 @@ mod tests {
             "got {:?}",
             err
         );
+    }
+
+    #[test]
+    fn test_read_hash_rows_streams_consecutive_hash_rows() {
+        let num_docs = 3;
+        let total_hashes = 4;
+        // Document i, hash j holds the value i * 10 + j.
+        let signatures: Vec<u64> = (0..num_docs * total_hashes)
+            .map(|k| ((k / total_hashes) * 10 + k % total_hashes) as u64)
+            .collect();
+        let header = HashFileHeader {
+            num_documents: num_docs as u64,
+            ngram_size: 5,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        let mut buf = Vec::new();
+        write_hash_header(&mut buf, &header).unwrap();
+        write_hash_data(&mut buf, &signatures, num_docs, total_hashes).unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let header = read_hash_header(&mut cursor).unwrap();
+
+        // Rows are hash-index-major: row j holds hash j of every document.
+        let first = read_hash_rows(&mut cursor, &header, 2).unwrap();
+        assert_eq!(first, vec![0, 10, 20, 1, 11, 21]);
+        let second = read_hash_rows(&mut cursor, &header, 2).unwrap();
+        assert_eq!(second, vec![2, 12, 22, 3, 13, 23]);
+    }
+
+    #[test]
+    fn test_read_hash_rows_truncated() {
+        let header = HashFileHeader {
+            num_documents: 3,
+            ngram_size: 5,
+            num_buckets: 1,
+            band_size: 2,
+        };
+        let mut cursor = Cursor::new(vec![0u8; 3 * 8 + 4]);
+        assert!(read_hash_rows(&mut cursor, &header, 2).is_err());
     }
 }

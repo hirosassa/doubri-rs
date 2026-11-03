@@ -91,6 +91,25 @@ pub fn bucket_value(signature: &[u64], bucket_idx: usize, config: &MinHashConfig
     hasher.digest()
 }
 
+/// Computes the bucket value of one document from a band stored row-major.
+///
+/// `rows` holds `band_size` rows of `num_docs` values each (hash-index-major),
+/// so the band of document `doc_idx` is `rows[r * num_docs + doc_idx]` for each row `r`.
+/// The result equals `bucket_value` on the same band.
+#[inline]
+pub fn bucket_value_from_rows(
+    rows: &[u64],
+    num_docs: usize,
+    band_size: usize,
+    doc_idx: usize,
+) -> u64 {
+    let mut hasher = Xxh3::with_seed(0);
+    for r in 0..band_size {
+        hasher.update(&rows[r * num_docs + doc_idx].to_le_bytes());
+    }
+    hasher.digest()
+}
+
 /// Returns the signature slice for a given document from a flat signatures array.
 #[inline]
 pub fn signature_slice(signatures: &[u64], doc_idx: usize, total_hashes: usize) -> &[u64] {
@@ -575,6 +594,41 @@ mod tests {
                 xxhash_rust::xxh3::xxh3_64_with_seed(&bytes, 0),
                 "bucket {bucket_idx}"
             );
+        }
+    }
+
+    #[test]
+    fn test_bucket_value_from_rows_matches_bucket_value() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 3,
+            band_size: 4,
+        };
+        let total_hashes = config.total_hashes();
+        let num_docs = 5;
+        let signatures: Vec<u64> = (0..num_docs * total_hashes)
+            .map(|k| (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .collect();
+
+        for bucket_idx in 0..config.num_buckets {
+            // Rows are hash-index-major: row r holds hash (bucket_idx * band_size + r) of every doc.
+            let mut rows = Vec::new();
+            for r in 0..config.band_size {
+                for doc in 0..num_docs {
+                    rows.push(signatures[doc * total_hashes + bucket_idx * config.band_size + r]);
+                }
+            }
+            for doc in 0..num_docs {
+                let expected = bucket_value(
+                    signature_slice(&signatures, doc, total_hashes),
+                    bucket_idx,
+                    &config,
+                );
+                assert_eq!(
+                    bucket_value_from_rows(&rows, num_docs, config.band_size, doc),
+                    expected
+                );
+            }
         }
     }
 }
