@@ -6,11 +6,11 @@ use rayon::prelude::*;
 
 use crate::error::DoubriError;
 use crate::format::{
-    FLAG_DUPLICATE, FLAG_UNIQUE, IndexEntry, NUM_INDEX_SPLITS, SourceEntry, idx_file_path,
-    read_hash_data, read_hash_header, write_dup_flags, write_idx_entry, write_idx_header,
-    write_src_file,
+    FLAG_DUPLICATE, FLAG_UNIQUE, HashFileHeader, IndexEntry, NUM_INDEX_SPLITS, SourceEntry,
+    idx_file_path, read_hash_header, read_hash_rows, write_dup_flags, write_idx_entry,
+    write_idx_header, write_src_file,
 };
-use crate::minhash::{MinHashConfig, bucket_value, signature_slice};
+use crate::minhash::{MinHashConfig, bucket_value_from_rows};
 
 /// Result of deduplication.
 #[derive(Debug)]
@@ -45,8 +45,9 @@ pub fn dedup_group(
     output_basename: &str,
     reverse: bool,
 ) -> Result<DedupResult, DoubriError> {
-    // Read all hash files into a flat signature array
-    let mut all_signatures: Vec<u64> = Vec::new();
+    // Open every hash file and read only its header. Signatures are streamed
+    // one band at a time below instead of being loaded all at once.
+    let mut readers: Vec<(BufReader<File>, HashFileHeader)> = Vec::new();
     let mut source_entries: Vec<SourceEntry> = Vec::new();
     let mut doc_locations: Vec<DocLocation> = Vec::new();
     let mut config: Option<MinHashConfig> = None;
@@ -75,46 +76,48 @@ pub fn dedup_group(
             config = Some(file_config);
         }
 
-        let signatures = read_hash_data(&mut file, &header)?;
         let num_docs = header.num_documents as usize;
-
         for doc_idx in 0..num_docs {
             doc_locations.push(DocLocation {
                 source_idx: source_idx as u32,
                 doc_idx: doc_idx as u32,
             });
         }
-        all_signatures.extend_from_slice(&signatures);
         total_documents += num_docs;
 
         source_entries.push(SourceEntry {
             item_count: header.num_documents,
             file_path: path.to_string_lossy().to_string(),
         });
+        readers.push((file, header));
     }
 
     let config = config.ok_or_else(|| DoubriError::Config {
         msg: "no hash files provided".to_string(),
     })?;
 
-    let total_hashes = config.total_hashes();
     let mut dup_flags = vec![FLAG_UNIQUE; total_documents];
 
     // Bucket values are needed both for duplicate detection and for the index
     // files, so compute them once per bucket and keep them. This costs
     // 8 bytes per document per bucket, far less than the signatures.
-    let bucket_values: Vec<Vec<u64>> = (0..config.num_buckets)
-        .map(|bucket_idx| {
-            (0..total_documents)
-                .into_par_iter()
-                .map(|i| {
-                    let sig = signature_slice(&all_signatures, i, total_hashes);
-                    bucket_value(sig, bucket_idx, &config)
-                })
-                .collect()
-        })
-        .collect();
-    drop(all_signatures);
+    // Hash files are hash-index-major, so each bucket's band is the next
+    // `band_size` rows of every file and the files are read sequentially once.
+    let mut bucket_values: Vec<Vec<u64>> = Vec::with_capacity(config.num_buckets);
+    for _ in 0..config.num_buckets {
+        let mut values: Vec<u64> = Vec::with_capacity(total_documents);
+        for (file, header) in &mut readers {
+            let num_docs = header.num_documents as usize;
+            let rows = read_hash_rows(file, header, config.band_size)?;
+            values.par_extend(
+                (0..num_docs)
+                    .into_par_iter()
+                    .map(|doc| bucket_value_from_rows(&rows, num_docs, config.band_size, doc)),
+            );
+        }
+        bucket_values.push(values);
+    }
+    drop(readers);
 
     // Detect duplicates per bucket
     for values in &bucket_values {
@@ -255,8 +258,9 @@ pub fn read_hash_file_list<R: BufRead>(reader: R) -> Result<Vec<PathBuf>, Doubri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{read_dup_flags, read_src_file};
+    use crate::format::{read_dup_flags, read_hash_data, read_src_file};
     use crate::minhash::process_jsonl;
+    use crate::minhash::{bucket_value, signature_slice};
     use tempfile::TempDir;
 
     fn create_hash_file(dir: &Path, name: &str, texts: &[&str]) -> PathBuf {
