@@ -8,8 +8,12 @@ repository = "https://github.com/hirosassa/doubri-rs"
 homepage = "https://github.com/hirosassa/doubri-rs"
 description = "A Rust implementation of doubri, a large-scale document deduplication toolkit"
 
-[package.metadata.dist]
-dist = true
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+pkg-fmt = "txz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
 
 [dependencies]
 doubri-core = { path = "../doubri-core" }
