@@ -21,12 +21,19 @@ fn doubri(dir: &Path, args: &[&str], stdin: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn doubri");
-    child
+    let write_result = child
         .stdin
         .take()
         .expect("stdin is piped")
-        .write_all(stdin.as_bytes())
-        .expect("failed to write stdin");
+        .write_all(stdin.as_bytes());
+    // The command may fail before reading stdin (e.g. argument validation)
+    if let Err(e) = write_result {
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "failed to write stdin: {e}"
+        );
+    }
     child.wait_with_output().expect("failed to wait for doubri")
 }
 
