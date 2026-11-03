@@ -6,7 +6,5 @@ resolver = "2"
 shared-version = true
 tag-name = "v{{version}}"
 
-# The profile that 'dist' will build with
-[profile.dist]
-inherits = "release"
+[profile.release]
 lto = "thin"

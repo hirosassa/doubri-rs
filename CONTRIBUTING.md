@@ -65,6 +65,9 @@ This will:
 3. Create a git tag (e.g., `v0.1.1`)
 4. Push the commit and tag to the remote
 
-The pushed tag triggers the release CI, which:
-1. Builds binaries for Linux (x86_64, aarch64) and macOS (x86_64, aarch64)
-2. Creates a GitHub Release with the binaries attached
+The pushed tag triggers `.github/workflows/release.yml`, which:
+1. Creates a GitHub Release
+2. Builds binaries for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64) with [upload-rust-binary-action](https://github.com/taiki-e/upload-rust-binary-action) and attaches them with SHA-256 checksums
+3. Updates the Homebrew formula in `hirosassa/homebrew-tap` (skipped for prereleases)
+
+Pull requests that touch the release workflow or the crates run the same builds in dry-run mode (nothing is uploaded).

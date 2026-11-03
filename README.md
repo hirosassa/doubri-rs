@@ -25,10 +25,10 @@ Via Homebrew (macOS):
 brew install hirosassa/tap/doubri
 ```
 
-Via shell installer (Linux/macOS):
+Via [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/hirosassa/doubri-rs/releases/latest/download/doubri-installer.sh | sh
+cargo binstall --git https://github.com/hirosassa/doubri-rs doubri
 ```
 
 Or download a prebuilt binary from [GitHub Releases](https://github.com/hirosassa/doubri-rs/releases).
