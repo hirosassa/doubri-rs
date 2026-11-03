@@ -1,0 +1,21 @@
+--- crates/doubri-core/src/merge.rs
++++ replace + with * in merge_groups
+@@ -69,17 +69,17 @@
+                 .cmp(&b.1.bucket_value)
+                 .then(a.0.cmp(&b.0))
+                 .then(a.1.item_number.cmp(&b.1.item_number))
+         });
+ 
+         // Detect cross-group duplicates with the same bucket value
+         let mut i = 0;
+         while i < all_entries.len() {
+-            let mut j = i + 1;
++            let mut j = i * /* ~ changed by cargo-mutants ~ */ 1;
+             while j < all_entries.len()
+                 && all_entries[j].1.bucket_value == all_entries[i].1.bucket_value
+             {
+                 j += 1;
+             }
+ 
+             // all_entries[i..j] share the same bucket value
+             if j - i > 1 {

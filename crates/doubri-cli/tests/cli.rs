@@ -147,7 +147,7 @@ fn merge_removes_duplicates_across_groups_and_keeps_older_group() {
         run_ok(dir.path(), &["dedup", name], &format!("{hash}\n"));
     }
     let merged = run_ok(dir.path(), &["merge", "g1", "g2"], "");
-    assert!(stderr(&merged).contains("Cross-group duplicates:"));
+    assert!(stderr(&merged).contains("Cross-group duplicates: 1\n"));
 
     let kept1 = run_ok(
         dir.path(),

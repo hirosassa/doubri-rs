@@ -1,0 +1,21 @@
+--- crates/doubri-core/src/merge.rs
++++ delete ! in merge_groups
+@@ -46,17 +46,17 @@
+ 
+     // Merge across each split file
+     for split_idx in start_split..=end_split {
+         // Read index entries from each group
+         let mut all_entries: Vec<(usize, IndexEntry)> = Vec::new(); // (group_idx, entry)
+ 
+         for (group_idx, source) in sources.iter().enumerate() {
+             let path = idx_file_path(&source.basename, split_idx);
+-            if !Path::new(&path).exists() {
++            if  /* ~ changed by cargo-mutants ~ */Path::new(&path).exists() {
+                 continue;
+             }
+ 
+             let mut reader = BufReader::new(File::open(&path)?);
+             read_idx_header(&mut reader)?;
+ 
+             while let Some(entry) = read_idx_entry(&mut reader)? {
+                 all_entries.push((group_idx, entry));

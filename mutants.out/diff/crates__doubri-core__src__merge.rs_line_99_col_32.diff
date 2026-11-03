@@ -1,0 +1,21 @@
+--- crates/doubri-core/src/merge.rs
++++ replace >= with < in merge_groups
+@@ -91,17 +91,17 @@
+                     let mark_range = if reverse {
+                         &all_entries[i..j - 1]
+                     } else {
+                         &all_entries[i + 1..j]
+                     };
+                     for (group_idx, entry) in mark_range {
+                         let idx = entry.item_number as usize;
+                         let flags = &mut group_flags[*group_idx];
+-                        if idx >= flags.len() {
++                        if idx < /* ~ changed by cargo-mutants ~ */ flags.len() {
+                             return Err(DoubriError::InvalidFormat {
+                                 msg: format!(
+                                     "item_number {} out of bounds for group {} (size {})",
+                                     entry.item_number,
+                                     group_idx,
+                                     flags.len()
+                                 ),
+                             });
