@@ -39,6 +39,10 @@ Pushes to `main` and pull requests run:
 - `cargo check`, `cargo fmt --check`, `cargo clippy`, `cargo test` on stable/beta/nightly
 - Code coverage via cargo-llvm-cov, uploaded to Codecov
 
+## Dependency Updates
+
+Dependabot opens weekly PRs for Cargo and GitHub Actions: minor/patch Cargo updates are grouped into one PR, major updates get their own PR, and Actions updates are grouped; for Actions PRs, run `gh actions-lock` on the branch and push before merging so `verify-lockfile` passes.
+
 ## Making a Release
 
 Releases are managed with [cargo-release](https://github.com/crate-ci/cargo-release). Install it first:
