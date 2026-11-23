@@ -67,9 +67,10 @@ fn header_usize(value: u64, field: &str) -> Result<usize, DoubriError> {
 /// Number of hash functions (`num_buckets * band_size`), computed in `usize` so that
 /// header values such as 65536 * 65536 neither panic nor wrap around.
 fn total_hashes(header: &HashFileHeader) -> Result<usize, DoubriError> {
-    header_usize(header.num_buckets.into(), "num_buckets")?
-        .checked_mul(header_usize(header.band_size.into(), "band_size")?)
-        .ok_or_else(|| overflow_error("num_buckets * band_size"))
+    let buckets = header_usize(header.num_buckets.into(), "num_buckets")?;
+    let band = header_usize(header.band_size.into(), "band_size")?;
+    let product = buckets.checked_mul(band);
+    product.ok_or_else(|| overflow_error("band count"))
 }
 
 fn overflow_error(expr: &str) -> DoubriError {
