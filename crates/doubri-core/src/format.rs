@@ -61,9 +61,7 @@ pub fn read_hash_header<R: Read>(reader: &mut R) -> Result<HashFileHeader, Doubr
 
 /// Converts an untrusted header value to `usize`, failing instead of truncating.
 fn header_usize(value: u64, field: &str) -> Result<usize, DoubriError> {
-    usize::try_from(value).map_err(|_| DoubriError::InvalidFormat {
-        msg: format!("{field} ({value}) does not fit in usize"),
-    })
+    usize::try_from(value).map_err(|_| overflow_error(field))
 }
 
 /// Number of hash functions (`num_buckets * band_size`), computed in `usize` so that
@@ -76,7 +74,7 @@ fn total_hashes(header: &HashFileHeader) -> Result<usize, DoubriError> {
 
 fn overflow_error(expr: &str) -> DoubriError {
     DoubriError::InvalidFormat {
-        msg: format!("hash file header is too large: {expr} overflows"),
+        msg: format!("hash file header is too large: {expr} overflows usize"),
     }
 }
 
