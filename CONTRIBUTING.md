@@ -38,6 +38,7 @@ cargo bench --bench bench -p doubri-core         # Full (~5min)
 Pushes to `main` and pull requests run:
 - `cargo check`, `cargo fmt --check`, `cargo clippy`, `cargo test` on stable/beta/nightly
 - Code coverage via cargo-llvm-cov, uploaded to Codecov
+- Codecov (`codecov.yml`) fails the project check if coverage drops by more than 2% and the patch check if new lines are under 90% covered (5% tolerance)
 
 ## Making a Release
 
