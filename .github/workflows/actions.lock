@@ -4,23 +4,25 @@
 version: 'v0.0.3'
 workflows:
     '.github/workflows/release.yml':
-        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
-        - 'taiki-e/create-gh-release-action@045e5c0ed9c50cc1f96de7e891a09ad3daea245f'
-        - 'taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6'
+        - 'actions/checkout@v7.0.1'
+        - 'taiki-e/create-gh-release-action@v1.12.0'
+        - 'taiki-e/upload-rust-binary-action@v1.30.2'
     '.github/workflows/test.yaml':
         - 'actions/checkout@v7'
         - 'codecov/codecov-action@v7'
         - 'taiki-e/install-action@v2'
+    '.github/workflows/update-actions-lock.yml':
+        - 'actions/checkout@v7.0.1'
     '.github/workflows/verify-lockfile.yml':
         - 'actions/checkout@v7'
 dependencies:
-    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1':
-        ref: 'v7.0.1'
+    'actions/checkout@v7':
+        ref: 'v7'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
-    'actions/checkout@v7':
-        ref: 'v7'
+    'actions/checkout@v7.0.1':
+        ref: 'v7.0.1'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
@@ -36,7 +38,7 @@ dependencies:
         repo_id: 200299178
         uses:
             - 'actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd'
-    'taiki-e/create-gh-release-action@045e5c0ed9c50cc1f96de7e891a09ad3daea245f':
+    'taiki-e/create-gh-release-action@v1.12.0':
         ref: 'v1.12.0'
         commit: 'sha1-045e5c0ed9c50cc1f96de7e891a09ad3daea245f'
         owner_id: 43724913
@@ -46,7 +48,7 @@ dependencies:
         commit: 'sha1-682ce6c3c696a4cd5168a05f98e51aa02b877941'
         owner_id: 43724913
         repo_id: 442947557
-    'taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6':
+    'taiki-e/upload-rust-binary-action@v1.30.2':
         ref: 'v1.30.2'
         commit: 'sha1-f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6'
         owner_id: 43724913

@@ -1,0 +1,57 @@
+name: Update actions lockfile
+
+# Why pull_request_target instead of pull_request: for Dependabot-triggered
+# pull_request runs, GitHub forces a read-only GITHUB_TOKEN, so the lockfile
+# could not be pushed back. pull_request_target runs with the base branch's
+# workflow definition and a token with the permissions requested below.
+#
+# This is safe only because the job never executes code from the PR: it
+# checks out the PR branch purely as data and runs `gh actions-lock`, which
+# reads the workflow YAML and writes actions.lock. Do not add steps that run
+# scripts, build tools or local actions from the checked-out tree.
+on:
+  pull_request_target:
+    paths:
+      - ".github/workflows/**"
+
+permissions: {}
+
+jobs:
+  update:
+    # Only Dependabot PRs from this repository, never forks.
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: true
+      - name: Install gh-actions-lock
+        run: gh extension install github/gh-actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Regenerate lockfile
+        run: gh actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+      # Pushes made with GITHUB_TOKEN do not trigger other workflows, so
+      # verify-lockfile will not re-run on the new commit by itself. After
+      # this job pushes, re-run the checks manually or close and reopen the PR.
+      - name: Commit and push lockfile
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if git diff --quiet -- .github/workflows/actions.lock; then
+            echo "actions.lock is up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/actions.lock
+          git commit -m "chore: update actions.lock"
+          git push origin "HEAD:refs/heads/${HEAD_REF}"

@@ -42,7 +42,9 @@ Pushes to `main` and pull requests run:
 
 ## Dependency Updates
 
-Dependabot opens weekly PRs for Cargo and GitHub Actions: Cargo updates get one PR per crate, Actions updates are grouped; for Actions PRs, run `gh actions-lock` on the branch and push before merging so `verify-lockfile` passes.
+Dependabot opens weekly PRs for Cargo and GitHub Actions: Cargo updates get one PR per crate, Actions updates are grouped; for Actions PRs, `.github/workflows/actions.lock` must be regenerated so `verify-lockfile` passes.
+
+The `update-actions-lock` workflow does this automatically: for Dependabot PRs from this repository that touch `.github/workflows/**`, it runs `gh actions-lock` and pushes an `actions.lock` commit to the PR branch if anything changed. It uses `GITHUB_TOKEN` only (no PAT or GitHub App), and pushes made with `GITHUB_TOKEN` do not trigger other workflows. After the bot pushes, re-run the PR's checks manually (or close and reopen the PR) so `verify-lockfile` runs against the new commit. If the automation fails, run `gh actions-lock` on the branch and push the result yourself.
 
 ## Making a Release
 
