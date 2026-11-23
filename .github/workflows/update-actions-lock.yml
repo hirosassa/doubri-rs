@@ -35,8 +35,10 @@ jobs:
         run: gh extension install github/gh-actions-lock
         env:
           GH_TOKEN: ${{ github.token }}
+      # --no-narrow: without it the tool rewrites SHA pins in workflow files,
+      # which this job neither commits nor has permission to push.
       - name: Regenerate lockfile
-        run: gh actions-lock
+        run: gh actions-lock --no-narrow
         env:
           GH_TOKEN: ${{ github.token }}
       # Pushes made with GITHUB_TOKEN do not trigger other workflows, so
