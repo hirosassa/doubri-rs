@@ -59,6 +59,27 @@ pub fn read_hash_header<R: Read>(reader: &mut R) -> Result<HashFileHeader, Doubr
     })
 }
 
+/// Converts an untrusted header value to `usize`, failing instead of truncating.
+fn header_usize(value: u64, field: &str) -> Result<usize, DoubriError> {
+    usize::try_from(value).map_err(|_| DoubriError::InvalidFormat {
+        msg: format!("{field} ({value}) does not fit in usize"),
+    })
+}
+
+/// Number of hash functions (`num_buckets * band_size`), computed in `usize` so that
+/// header values such as 65536 * 65536 neither panic nor wrap around.
+fn total_hashes(header: &HashFileHeader) -> Result<usize, DoubriError> {
+    header_usize(header.num_buckets.into(), "num_buckets")?
+        .checked_mul(header_usize(header.band_size.into(), "band_size")?)
+        .ok_or_else(|| overflow_error("num_buckets * band_size"))
+}
+
+fn overflow_error(expr: &str) -> DoubriError {
+    DoubriError::InvalidFormat {
+        msg: format!("hash file header is too large: {expr} overflows"),
+    }
+}
+
 /// Writes bucket data to a hash file (bucket-major layout).
 ///
 /// `signatures`: flat array of MinHash signatures, length `num_docs * total_hashes`.
@@ -86,9 +107,12 @@ pub fn read_hash_data<R: Read>(
     reader: &mut R,
     header: &HashFileHeader,
 ) -> Result<Vec<u64>, DoubriError> {
-    let num_docs = header.num_documents as usize;
-    let total_hashes = (header.num_buckets * header.band_size) as usize;
-    let mut signatures = vec![0u64; num_docs * total_hashes];
+    let num_docs = header_usize(header.num_documents, "num_documents")?;
+    let total_hashes = total_hashes(header)?;
+    let len = num_docs
+        .checked_mul(total_hashes)
+        .ok_or_else(|| overflow_error("num_documents * total_hashes"))?;
+    let mut signatures = vec![0u64; len];
 
     for hash_idx in 0..total_hashes {
         for doc_idx in 0..num_docs {
@@ -111,7 +135,11 @@ pub fn read_hash_rows<R: Read>(
     header: &HashFileHeader,
     num_rows: usize,
 ) -> Result<Vec<u64>, DoubriError> {
-    let mut values = vec![0u64; num_rows * header.num_documents as usize];
+    let num_documents = header_usize(header.num_documents, "num_documents")?;
+    let len = num_rows
+        .checked_mul(num_documents)
+        .ok_or_else(|| overflow_error("num_rows * num_documents"))?;
+    let mut values = vec![0u64; len];
     reader.read_u64_into::<LittleEndian>(&mut values)?;
     Ok(values)
 }
@@ -236,6 +264,55 @@ pub fn idx_file_path(basename: &str, split_idx: u8) -> String {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn test_total_hashes_does_not_wrap_for_max_u16_header() {
+        // 65536 * 65536 used to wrap to 0 (release) or panic (debug) in u32 arithmetic.
+        let header = HashFileHeader {
+            num_documents: 1,
+            ngram_size: 5,
+            num_buckets: 65536,
+            band_size: 65536,
+        };
+        assert_eq!(total_hashes(&header).unwrap(), 1usize << 32);
+    }
+
+    #[test]
+    fn test_total_hashes_rejects_overflow() {
+        let header = HashFileHeader {
+            num_documents: 1,
+            ngram_size: 5,
+            num_buckets: u32::MAX,
+            band_size: u32::MAX,
+        };
+        // Fits in usize on 64-bit targets; only 32-bit targets overflow here.
+        assert_eq!(total_hashes(&header).is_err(), usize::BITS < 64,);
+    }
+
+    #[test]
+    fn test_read_hash_data_rejects_docs_hashes_overflow() {
+        let header = HashFileHeader {
+            num_documents: u64::MAX,
+            ngram_size: 5,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        let result = read_hash_data(&mut Cursor::new(Vec::new()), &header);
+        assert!(matches!(result, Err(DoubriError::InvalidFormat { .. })));
+    }
+
+    #[test]
+    fn test_read_hash_rows_rejects_overflow() {
+        let header = HashFileHeader {
+            num_documents: 2,
+            ngram_size: 5,
+            num_buckets: 1,
+            band_size: 1,
+        };
+        let result = read_hash_rows(&mut Cursor::new(Vec::new()), &header, usize::MAX);
+        assert!(matches!(result, Err(DoubriError::InvalidFormat { .. })));
+    }
 
     #[test]
     fn test_hash_header_roundtrip() {
