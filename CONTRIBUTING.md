@@ -40,6 +40,10 @@ Pushes to `main` and pull requests run:
 - Code coverage via cargo-llvm-cov, uploaded to Codecov
 - Codecov (`codecov.yml`) fails the project check if coverage drops by more than 2% and the patch check if new lines are under 90% covered (5% tolerance)
 
+## Dependency Updates
+
+Dependabot opens weekly PRs for Cargo and GitHub Actions: Cargo updates get one PR per crate, Actions updates are grouped; for Actions PRs, run `gh actions-lock` on the branch and push before merging so `verify-lockfile` passes.
+
 ## Making a Release
 
 Releases are managed with [cargo-release](https://github.com/crate-ci/cargo-release). Install it first:

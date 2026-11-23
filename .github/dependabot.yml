@@ -10,3 +10,9 @@ updates:
       actions:
         patterns:
           - "*"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
