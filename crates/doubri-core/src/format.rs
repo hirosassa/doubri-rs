@@ -111,15 +111,35 @@ pub fn read_hash_data<R: Read>(
     let len = num_docs
         .checked_mul(total_hashes)
         .ok_or_else(|| overflow_error("num_documents * total_hashes"))?;
-    let mut signatures = vec![0u64; len];
+    // Read in file order (bucket-major) first: the buffer only grows as data actually
+    // arrives, so a crafted header on a short file fails before any huge allocation.
+    let bucket_major = read_u64_vec(reader, len)?;
 
+    // The data is now known to exist, so the final allocation is bounded by the input size.
+    let mut signatures = vec![0u64; len];
     for hash_idx in 0..total_hashes {
         for doc_idx in 0..num_docs {
-            signatures[doc_idx * total_hashes + hash_idx] = reader.read_u64::<LittleEndian>()?;
+            signatures[doc_idx * total_hashes + hash_idx] =
+                bucket_major[hash_idx * num_docs + doc_idx];
         }
     }
 
     Ok(signatures)
+}
+
+/// Reads `len` little-endian `u64` values, growing the buffer in bounded chunks so a
+/// header-declared `len` larger than the actual data fails with `UnexpectedEof`
+/// instead of triggering a huge up-front allocation.
+fn read_u64_vec<R: Read>(reader: &mut R, len: usize) -> Result<Vec<u64>, DoubriError> {
+    const CHUNK_VALUES: usize = 1 << 16;
+    let mut values: Vec<u64> = Vec::new();
+    while values.len() < len {
+        let start = values.len();
+        let end = start.saturating_add(CHUNK_VALUES).min(len);
+        values.resize(end, 0);
+        reader.read_u64_into::<LittleEndian>(&mut values[start..end])?;
+    }
+    Ok(values)
 }
 
 /// Reads the next `num_rows` hash-index rows from a hash file (hash-index-major layout).
@@ -138,9 +158,7 @@ pub fn read_hash_rows<R: Read>(
     let len = num_rows
         .checked_mul(num_documents)
         .ok_or_else(|| overflow_error("num_rows * num_documents"))?;
-    let mut values = vec![0u64; len];
-    reader.read_u64_into::<LittleEndian>(&mut values)?;
-    Ok(values)
+    read_u64_vec(reader, len)
 }
 
 /// Writes a .dup flag file.
@@ -299,6 +317,35 @@ mod tests {
         };
         let result = read_hash_data(&mut Cursor::new(Vec::new()), &header);
         assert!(matches!(result, Err(DoubriError::InvalidFormat { .. })));
+    }
+
+    #[test]
+    fn test_read_hash_data_crafted_header_fails_without_huge_allocation() {
+        // 65536 * 65536 hashes for one document would be 32 GiB if sized from the header.
+        let header = HashFileHeader {
+            num_documents: 1,
+            ngram_size: 5,
+            num_buckets: 65536,
+            band_size: 65536,
+        };
+        let err = read_hash_data(&mut Cursor::new(vec![0u8; 16]), &header).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Io(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof)
+        );
+    }
+
+    #[test]
+    fn test_read_hash_rows_crafted_header_fails_without_huge_allocation() {
+        let header = HashFileHeader {
+            num_documents: u64::from(u32::MAX),
+            ngram_size: 5,
+            num_buckets: 1,
+            band_size: 1,
+        };
+        let err = read_hash_rows(&mut Cursor::new(Vec::new()), &header, 1 << 30).unwrap_err();
+        assert!(
+            matches!(err, DoubriError::Io(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof)
+        );
     }
 
     #[test]
