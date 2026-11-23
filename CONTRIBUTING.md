@@ -41,7 +41,7 @@ Pushes to `main` and pull requests run:
 
 ## Dependency Updates
 
-Dependabot opens weekly PRs for Cargo and GitHub Actions: minor/patch Cargo updates are grouped into one PR, major updates get their own PR, and Actions updates are grouped; for Actions PRs, run `gh actions-lock` on the branch and push before merging so `verify-lockfile` passes.
+Dependabot opens weekly PRs for Cargo and GitHub Actions: Cargo updates get one PR per crate, Actions updates are grouped; for Actions PRs, run `gh actions-lock` on the branch and push before merging so `verify-lockfile` passes.
 
 ## Making a Release
 
