@@ -54,11 +54,10 @@ pub fn dedup_group(
     // one band at a time below instead of being loaded all at once.
     let mut readers: Vec<(BufReader<File>, HashFileHeader)> = Vec::new();
     let mut source_entries: Vec<SourceEntry> = Vec::new();
-    let mut doc_locations: Vec<DocLocation> = Vec::new();
     let mut config: Option<MinHashConfig> = None;
     let mut total_documents: usize = 0;
 
-    for (source_idx, path) in hash_file_paths.iter().enumerate() {
+    for path in hash_file_paths {
         let mut file = BufReader::new(File::open(path)?);
         let header = read_hash_header(&mut file)?;
 
@@ -78,13 +77,6 @@ pub fn dedup_group(
             config = Some(file_config);
         }
 
-        let source_idx: u32 = conv(source_idx, "source index")?;
-        for doc_idx in 0..header.num_documents {
-            doc_locations.push(DocLocation {
-                source_idx,
-                doc_idx: conv(doc_idx, "document index")?,
-            });
-        }
         let num_docs: usize = conv(header.num_documents, "document count")?;
         total_documents = total_documents
             .checked_add(num_docs)
@@ -103,16 +95,17 @@ pub fn dedup_group(
         msg: "no hash files provided".to_string(),
     })?;
 
-    let mut dup_flags = vec![FLAG_UNIQUE; total_documents];
-
     // Bucket values are needed both for duplicate detection and for the index
     // files, so compute them once per bucket and keep them. This costs
     // 8 bytes per document per bucket, far less than the signatures.
+    // The header counts are untrusted, so nothing is sized from them before
+    // the signature data has been read: buffers grow only as data arrives and
+    // a truncated file fails with `UnexpectedEof` instead of exhausting memory.
     // Hash files are hash-index-major, so each bucket's band is the next
     // `band_size` rows of every file and the files are read sequentially once.
     let mut bucket_values: Vec<Vec<u64>> = Vec::with_capacity(config.num_buckets);
     for _ in 0..config.num_buckets {
-        let mut values: Vec<u64> = Vec::with_capacity(total_documents);
+        let mut values: Vec<u64> = Vec::new();
         for (file, header) in &mut readers {
             let num_docs: usize = conv(header.num_documents, "document count")?;
             let rows = read_hash_rows(file, header, config.band_size)?;
@@ -125,6 +118,11 @@ pub fn dedup_group(
         bucket_values.push(values);
     }
     drop(readers);
+
+    // All signature data was read successfully, so the header counts are now
+    // backed by real data and per-document state can be allocated safely.
+    let mut dup_flags = vec![FLAG_UNIQUE; total_documents];
+    let doc_locations = build_doc_locations(&source_entries, total_documents)?;
 
     // Detect duplicates per bucket
     for values in &bucket_values {
@@ -179,6 +177,24 @@ pub fn dedup_group(
         total_documents,
         duplicate_count,
     })
+}
+
+/// Lists the (source, document) location of every document in global order.
+fn build_doc_locations(
+    sources: &[SourceEntry],
+    total_documents: usize,
+) -> Result<Vec<DocLocation>, DoubriError> {
+    let mut locations = Vec::with_capacity(total_documents);
+    for (source_idx, entry) in sources.iter().enumerate() {
+        let source_idx: u32 = conv(source_idx, "source index")?;
+        for doc_idx in 0..entry.item_count {
+            locations.push(DocLocation {
+                source_idx,
+                doc_idx: conv(doc_idx, "document index")?,
+            });
+        }
+    }
+    Ok(locations)
 }
 
 /// Marks duplicates within runs of entries (sorted by bucket value) sharing a bucket value.
@@ -523,6 +539,30 @@ mod tests {
         assert!(
             matches!(err, DoubriError::Config { .. }),
             "expected Config error for mismatched configs, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_dedup_huge_header_count_without_data_fails_with_eof() {
+        // A header claiming ~4G documents with no signature data must fail on the
+        // first read instead of allocating per-document state up front.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("huge.hash");
+        let header = HashFileHeader {
+            num_documents: u64::from(u32::MAX),
+            ngram_size: 3,
+            num_buckets: 3,
+            band_size: 2,
+        };
+        let mut file = File::create(&path).unwrap();
+        crate::format::write_hash_header(&mut file, &header).unwrap();
+        drop(file);
+
+        let basename = dir.path().join("output").to_string_lossy().to_string();
+        let err = dedup_group(&[path], &basename, false).unwrap_err();
+        assert!(
+            matches!(&err, DoubriError::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof),
+            "expected UnexpectedEof, got {err:?}"
         );
     }
 
