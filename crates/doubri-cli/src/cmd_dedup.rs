@@ -1,4 +1,4 @@
-use std::io::{self, BufReader};
+use std::io::{self};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -18,7 +18,7 @@ pub struct DedupArgs {
 pub fn run(args: &DedupArgs) -> Result<()> {
     let paths = {
         let stdin = io::stdin();
-        let reader = BufReader::new(stdin.lock());
+        let reader = stdin.lock();
         read_hash_file_list(reader).context("failed to read hash file list")?
     };
 

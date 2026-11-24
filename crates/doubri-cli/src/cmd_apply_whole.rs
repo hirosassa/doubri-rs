@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufWriter};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -23,7 +23,7 @@ pub fn run(args: &ApplyWholeArgs) -> Result<()> {
 
     let count = {
         let stdin = io::stdin();
-        let reader = BufReader::new(stdin.lock());
+        let reader = stdin.lock();
         apply_whole(reader, &mut writer, &flags).context("apply-whole failed")?
     };
 

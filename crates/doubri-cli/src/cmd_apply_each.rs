@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufWriter};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -56,7 +56,7 @@ pub fn run(args: &ApplyEachArgs) -> Result<()> {
 
     let count = {
         let stdin = io::stdin();
-        let reader = BufReader::new(stdin.lock());
+        let reader = stdin.lock();
         apply_each(reader, &mut writer, &flags, offset).context("apply-each failed")?
     };
 

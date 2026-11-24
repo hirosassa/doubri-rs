@@ -366,7 +366,6 @@ dependencies = [
  "criterion",
  "proptest",
  "rayon",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror",
