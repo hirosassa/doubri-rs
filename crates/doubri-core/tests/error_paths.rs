@@ -34,7 +34,7 @@ impl Write for FailingWriter {
     }
 }
 
-fn small_config() -> MinHashConfig {
+const fn small_config() -> MinHashConfig {
     MinHashConfig {
         ngram_size: 3,
         num_buckets: 2,
