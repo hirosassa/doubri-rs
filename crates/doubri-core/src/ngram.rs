@@ -6,11 +6,13 @@ pub fn char_ngrams(text: &str, n: usize) -> impl Iterator<Item = &str> {
     if n == 0 || text.len() < n {
         CharNgrams::Empty
     } else if text.is_ascii() {
+        // `text.len() >= n` was checked above, so this cannot underflow.
+        let last = text.len().saturating_sub(n);
         CharNgrams::Ascii(AsciiNgramIter {
             text,
             n,
             pos: 0,
-            len: text.len(),
+            last,
         })
     } else {
         let char_indices: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
@@ -42,33 +44,78 @@ impl<'a> Iterator for CharNgrams<'a> {
             CharNgrams::Unicode(iter) => iter.next(),
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            CharNgrams::Empty => (0, Some(0)),
+            CharNgrams::Ascii(iter) => iter.size_hint(),
+            CharNgrams::Unicode(iter) => iter.size_hint(),
+        }
+    }
+
+    fn count(self) -> usize {
+        self.size_hint().0
+    }
+
+    // `collect` and `for_each` go through `fold`; dispatching on the variant once
+    // (instead of on every `next`) keeps the per-n-gram loop tight.
+    fn fold<B, F>(self, init: B, f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        match self {
+            CharNgrams::Empty => init,
+            CharNgrams::Ascii(iter) => iter.fold(init, f),
+            CharNgrams::Unicode(iter) => iter.fold(init, f),
+        }
+    }
 }
 
 struct AsciiNgramIter<'a> {
     text: &'a str,
     n: usize,
     pos: usize,
-    len: usize,
+    /// Largest valid window start: `text.len() - n` (validated once in `char_ngrams`).
+    last: usize,
 }
 
 impl<'a> Iterator for AsciiNgramIter<'a> {
     type Item = &'a str;
 
     #[inline]
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "hot path: `pos + n <= len` is checked before `pos` grows, and `len` is a \
-                  slice length (< isize::MAX), so neither sum can overflow"
-    )]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.pos + self.n > self.len {
+        if self.pos > self.last {
             return None;
         }
         let start = self.pos;
-        self.pos += 1;
-        // ASCII text has a char boundary at every byte offset, so `get` succeeds for every
-        // window passing the check above; a failure could only end the iteration early.
-        self.text.get(start..start + self.n)
+        // `start <= last = len - n`, so neither `start + 1` (`start < len`) nor
+        // `start + n` (`<= len`) can wrap; `wrapping_add` avoids the release-mode
+        // overflow check in this hot loop. ASCII text has a char boundary at every
+        // offset, so `get` only fails for an out-of-range window, which cannot occur.
+        self.pos = start.wrapping_add(1);
+        self.text.get(start..start.wrapping_add(self.n))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // `pos <= last + 1` and `last < len`, so the sum cannot wrap; the saturating
+        // subtraction only yields 0 when the iterator is exhausted.
+        let remaining = self.last.wrapping_add(1).saturating_sub(self.pos);
+        (remaining, Some(remaining))
+    }
+
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = init;
+        // `last < len`, so `last + 1` cannot wrap. Same window/boundary reasoning as `next`.
+        for start in self.pos..self.last.wrapping_add(1) {
+            match self.text.get(start..start.wrapping_add(self.n)) {
+                Some(ngram) => acc = f(acc, ngram),
+                None => break,
+            }
+        }
+        acc
     }
 }
 
@@ -83,6 +130,18 @@ struct UnicodeNgramIter<'a> {
 
 impl<'a> Iterator for UnicodeNgramIter<'a> {
     type Item = &'a str;
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // Windows left: `num_chars - n + 1 - pos`, or 0 once exhausted (or if `n` exceeds
+        // the text, which `char_ngrams` rules out).
+        let remaining = self
+            .num_chars
+            .checked_sub(self.n)
+            .and_then(|d| d.checked_add(1))
+            .and_then(|w| w.checked_sub(self.pos))
+            .unwrap_or(0);
+        (remaining, Some(remaining))
+    }
 
     fn next(&mut self) -> Option<Self::Item> {
         let end_pos = self
@@ -199,5 +258,60 @@ mod tests {
     fn test_unicode_text_exactly_ngram_size_yields_one_ngram() {
         let result: Vec<&str> = char_ngrams("あいうえお", 5).collect();
         assert_eq!(result, vec!["あいうえお"]);
+    }
+
+    #[test]
+    fn test_size_hint_is_exact_before_and_during_iteration() {
+        for text in ["", "ab", "abcdef", "héllo wörld", "日本語のテキスト"] {
+            for n in 0..=text.chars().count() + 1 {
+                let mut iter = char_ngrams(text, n);
+                // A `for` loop drives `next`, independent of `size_hint`/`count`.
+                let mut expected = 0usize;
+                for _ in char_ngrams(text, n) {
+                    expected += 1;
+                }
+                assert_eq!(
+                    iter.size_hint(),
+                    (expected, Some(expected)),
+                    "{text:?} n={n}"
+                );
+                if iter.next().is_some() {
+                    let left = expected - 1;
+                    assert_eq!(
+                        iter.size_hint(),
+                        (left, Some(left)),
+                        "{text:?} n={n} after next"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_count_and_collect_agree_with_manual_iteration() {
+        for text in ["", "abcdefgh", "ab", "héllo wörld", "日本語のテキスト"] {
+            for n in 1..=4 {
+                let mut manual = Vec::new();
+                for g in char_ngrams(text, n) {
+                    manual.push(g);
+                }
+                assert_eq!(char_ngrams(text, n).count(), manual.len(), "{text:?} n={n}");
+                assert_eq!(
+                    char_ngrams(text, n).collect::<Vec<_>>(),
+                    manual,
+                    "{text:?} n={n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ascii_ngrams_are_exact_windows() {
+        assert_eq!(
+            char_ngrams("abcde", 3).collect::<Vec<_>>(),
+            vec!["abc", "bcd", "cde"]
+        );
+        assert_eq!(char_ngrams("abc", 3).collect::<Vec<_>>(), vec!["abc"]);
+        assert_eq!(char_ngrams("ab", 3).count(), 0);
     }
 }
