@@ -4,11 +4,19 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+*"
+  # Manual re-run of publish-homebrew-formula only, e.g. to recover a failed publish
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish the Homebrew formula for (e.g. v0.2.0)
+        required: true
+        type: string
 
 permissions: {}
 
 jobs:
   create-release:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -21,6 +29,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   upload-assets:
+    if: ${{ github.event_name == 'push' }}
     needs: create-release
     permissions:
       contents: write
@@ -57,63 +66,33 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   publish-homebrew-formula:
+    # upload-assets is skipped on manual runs, so run whenever it did not fail.
     needs: upload-assets
     # Skip prereleases (e.g. v1.0.0-rc.1)
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: ${{ !cancelled() && !failure() && !contains(inputs.tag || github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: hirosassa/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           persist-credentials: true
-      - name: Generate formula
+      # The script lives in this repo, not the tap checkout, so fetch it at the
+      # tag being published.
+      - name: Fetch formula generator
         run: |
           set -euo pipefail
-          version="${TAG#v}"
-          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          mkdir checksums
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.tar.xz.sha256' --dir checksums
-          sha() { cut -d' ' -f1 "checksums/doubri-$1.tar.xz.sha256"; }
-          cat > Formula/doubri.rb <<RUBY
-          class Doubri < Formula
-            desc "A Rust implementation of doubri, a large-scale document deduplication toolkit"
-            homepage "https://github.com/hirosassa/doubri-rs"
-            version "${version}"
-            license "MIT"
-
-            on_macos do
-              on_arm do
-                url "${base}/doubri-aarch64-apple-darwin.tar.xz"
-                sha256 "$(sha aarch64-apple-darwin)"
-              end
-              on_intel do
-                url "${base}/doubri-x86_64-apple-darwin.tar.xz"
-                sha256 "$(sha x86_64-apple-darwin)"
-              end
-            end
-
-            on_linux do
-              on_arm do
-                url "${base}/doubri-aarch64-unknown-linux-gnu.tar.xz"
-                sha256 "$(sha aarch64-unknown-linux-gnu)"
-              end
-              on_intel do
-                url "${base}/doubri-x86_64-unknown-linux-gnu.tar.xz"
-                sha256 "$(sha x86_64-unknown-linux-gnu)"
-              end
-            end
-
-            def install
-              bin.install "doubri"
-            end
-          end
-          RUBY
+          mkdir -p "$RUNNER_TEMP/scripts"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/.github/scripts/generate-formula.sh?ref=${GITHUB_SHA}" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/scripts/generate-formula.sh"
+          chmod +x "$RUNNER_TEMP/scripts/generate-formula.sh"
+      - name: Generate formula
+        run: '"$RUNNER_TEMP/scripts/generate-formula.sh" "$TAG" Formula/doubri.rb'
       - name: Commit formula
         run: |
           git config user.name "github-actions[bot]"
