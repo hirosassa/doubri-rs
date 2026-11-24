@@ -55,13 +55,20 @@ impl<'a> Iterator for AsciiNgramIter<'a> {
     type Item = &'a str;
 
     #[inline]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "hot path: `pos + n <= len` is checked before `pos` grows, and `len` is a \
+                  slice length (< isize::MAX), so neither sum can overflow"
+    )]
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos + self.n > self.len {
             return None;
         }
         let start = self.pos;
         self.pos += 1;
-        Some(&self.text[start..start + self.n])
+        // ASCII text has a char boundary at every byte offset, so `get` succeeds for every
+        // window passing the check above; a failure could only end the iteration early.
+        self.text.get(start..start + self.n)
     }
 }
 
@@ -78,18 +85,18 @@ impl<'a> Iterator for UnicodeNgramIter<'a> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.num_chars < self.n || self.pos + self.n > self.num_chars {
-            return None;
-        }
-
-        let start = self.char_indices[self.pos];
-        let end = if self.pos + self.n < self.num_chars {
-            self.char_indices[self.pos + self.n]
+        let end_pos = self
+            .pos
+            .checked_add(self.n)
+            .filter(|&e| e <= self.num_chars)?;
+        let start = *self.char_indices.get(self.pos)?;
+        let end = if end_pos < self.num_chars {
+            *self.char_indices.get(end_pos)?
         } else {
             self.text_len
         };
-        self.pos += 1;
-        Some(&self.text[start..end])
+        self.pos = self.pos.checked_add(1)?;
+        self.text.get(start..end)
     }
 }
 
@@ -104,6 +111,11 @@ impl<'a> Iterator for UnicodeNgramIter<'a> {
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 mod tests {

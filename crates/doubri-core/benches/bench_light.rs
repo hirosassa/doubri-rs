@@ -8,6 +8,11 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 
@@ -42,7 +47,7 @@ fn bench_char_ngrams(c: &mut Criterion) {
         let text = generate_ascii_text(size);
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_with_input(BenchmarkId::new("ascii/n5", size), &text, |b, text| {
-            b.iter(|| char_ngrams(text, 5).count())
+            b.iter(|| char_ngrams(text, 5).count());
         });
     }
     group.finish();
@@ -62,7 +67,7 @@ fn bench_compute_minhash(c: &mut Criterion) {
         let text = generate_ascii_text(size);
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_with_input(BenchmarkId::new("ascii/b20r40", size), &text, |b, text| {
-            b.iter(|| compute_minhash(text, &config))
+            b.iter(|| compute_minhash(text, &config).unwrap());
         });
     }
     group.finish();
@@ -74,7 +79,7 @@ fn bench_jaccard_similarity(c: &mut Criterion) {
     let text_a = generate_ascii_text(1_000);
     let text_b = generate_ascii_text(1_000);
     group.bench_function("1kb", |b| {
-        b.iter(|| jaccard_similarity(&text_a, &text_b, 5))
+        b.iter(|| jaccard_similarity(&text_a, &text_b, 5));
     });
     group.finish();
 }

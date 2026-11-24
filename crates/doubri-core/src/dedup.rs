@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
-use crate::error::DoubriError;
+use crate::error::{DoubriError, conv};
 use crate::format::{
     FLAG_DUPLICATE, FLAG_UNIQUE, HashFileHeader, IndexEntry, NUM_INDEX_SPLITS, SourceEntry,
     idx_file_path, read_hash_header, read_hash_rows, write_dup_flags, write_idx_entry,
@@ -37,9 +37,14 @@ struct BucketEntry {
 
 /// Performs within-group deduplication from a list of hash files.
 ///
-/// - `hash_file_paths`: list of MinHash hash file paths.
+/// - `hash_file_paths`: list of `MinHash` hash file paths.
 /// - `output_basename`: base name for output files (.dup, .idx.*, .src).
 /// - `reverse`: if true, keeps the newer document (later file/line takes priority).
+///
+/// # Errors
+///
+/// Returns an error on I/O failure, malformed or mutually inconsistent hash files, an empty
+/// file list, or when a count does not fit the integer type used for it.
 pub fn dedup_group(
     hash_file_paths: &[PathBuf],
     output_basename: &str,
@@ -59,31 +64,33 @@ pub fn dedup_group(
 
         // Get config from first file, verify consistency for subsequent files
         let file_config = MinHashConfig {
-            ngram_size: header.ngram_size as usize,
-            num_buckets: header.num_buckets as usize,
-            band_size: header.band_size as usize,
+            ngram_size: conv(header.ngram_size, "ngram size")?,
+            num_buckets: conv(header.num_buckets, "bucket count")?,
+            band_size: conv(header.band_size, "band size")?,
         };
         if let Some(ref existing) = config {
             if *existing != file_config {
                 return Err(DoubriError::Config {
-                    msg: format!(
-                        "hash file config mismatch: {:?} vs {:?}",
-                        existing, file_config
-                    ),
+                    msg: format!("hash file config mismatch: {existing:?} vs {file_config:?}"),
                 });
             }
         } else {
             config = Some(file_config);
         }
 
-        let num_docs = header.num_documents as usize;
-        for doc_idx in 0..num_docs {
+        let source_idx: u32 = conv(source_idx, "source index")?;
+        for doc_idx in 0..header.num_documents {
             doc_locations.push(DocLocation {
-                source_idx: source_idx as u32,
-                doc_idx: doc_idx as u32,
+                source_idx,
+                doc_idx: conv(doc_idx, "document index")?,
             });
         }
-        total_documents += num_docs;
+        let num_docs: usize = conv(header.num_documents, "document count")?;
+        total_documents = total_documents
+            .checked_add(num_docs)
+            .ok_or(DoubriError::Overflow {
+                context: "total document count",
+            })?;
 
         source_entries.push(SourceEntry {
             item_count: header.num_documents,
@@ -107,13 +114,13 @@ pub fn dedup_group(
     for _ in 0..config.num_buckets {
         let mut values: Vec<u64> = Vec::with_capacity(total_documents);
         for (file, header) in &mut readers {
-            let num_docs = header.num_documents as usize;
+            let num_docs: usize = conv(header.num_documents, "document count")?;
             let rows = read_hash_rows(file, header, config.band_size)?;
-            values.par_extend(
-                (0..num_docs)
-                    .into_par_iter()
-                    .map(|doc| bucket_value_from_rows(&rows, num_docs, config.band_size, doc)),
-            );
+            let chunk = (0..num_docs)
+                .into_par_iter()
+                .map(|doc| bucket_value_from_rows(&rows, num_docs, config.band_size, doc))
+                .collect::<Result<Vec<u64>, DoubriError>>()?;
+            values.extend(chunk);
         }
         bucket_values.push(values);
     }
@@ -124,11 +131,13 @@ pub fn dedup_group(
         let mut entries: Vec<BucketEntry> = values
             .iter()
             .enumerate()
-            .map(|(i, &bucket_value)| BucketEntry {
-                bucket_value,
-                global_idx: i as u64,
+            .map(|(i, &bucket_value)| {
+                Ok(BucketEntry {
+                    bucket_value,
+                    global_idx: conv(i, "document index")?,
+                })
             })
-            .collect();
+            .collect::<Result<_, DoubriError>>()?;
 
         // Sort by bucket value
         entries.par_sort_unstable_by(|a, b| {
@@ -137,45 +146,28 @@ pub fn dedup_group(
                 .then(a.global_idx.cmp(&b.global_idx))
         });
 
-        // Mark duplicates within groups sharing the same bucket value
-        let mut i = 0;
-        while i < entries.len() {
-            let mut j = i + 1;
-            while j < entries.len() && entries[j].bucket_value == entries[i].bucket_value {
-                j += 1;
-            }
-
-            // entries[i..j] share the same bucket value
-            if j - i > 1 {
-                if reverse {
-                    // Keep the newer one (mark all but the last)
-                    for entry in &entries[i..j - 1] {
-                        dup_flags[entry.global_idx as usize] = FLAG_DUPLICATE;
-                    }
-                } else {
-                    // Keep the older one (mark all but the first)
-                    for entry in &entries[i + 1..j] {
-                        dup_flags[entry.global_idx as usize] = FLAG_DUPLICATE;
-                    }
-                }
-            }
-
-            i = j;
-        }
+        mark_duplicates(&entries, reverse, &mut dup_flags)?;
     }
 
-    let total_documents = total_documents as u64;
-    let duplicate_count = dup_flags.iter().filter(|&&f| f == FLAG_DUPLICATE).count() as u64;
+    let total_documents: u64 = conv(total_documents, "total document count")?;
+    // Bounded by `dup_flags.len()`, so the sum cannot overflow `usize`.
+    let duplicate_count: u64 = conv(
+        dup_flags
+            .iter()
+            .map(|&f| usize::from(f == FLAG_DUPLICATE))
+            .sum::<usize>(),
+        "duplicate count",
+    )?;
 
     // Write .dup file
     {
-        let mut file = BufWriter::new(File::create(format!("{}.dup", output_basename))?);
+        let mut file = BufWriter::new(File::create(format!("{output_basename}.dup"))?);
         write_dup_flags(&mut file, &dup_flags)?;
     }
 
     // Write .src file
     {
-        let mut file = BufWriter::new(File::create(format!("{}.src", output_basename))?);
+        let mut file = BufWriter::new(File::create(format!("{output_basename}.src"))?);
         write_src_file(&mut file, &source_entries)?;
     }
 
@@ -188,6 +180,36 @@ pub fn dedup_group(
         duplicate_count,
     })
 }
+
+/// Marks duplicates within runs of entries (sorted by bucket value) sharing a bucket value.
+fn mark_duplicates(
+    entries: &[BucketEntry],
+    reverse: bool,
+    dup_flags: &mut [u8],
+) -> Result<(), DoubriError> {
+    for group in entries.chunk_by(|a, b| a.bucket_value == b.bucket_value) {
+        // Keep the newer one (mark all but the last) when `reverse`,
+        // otherwise keep the older one (mark all but the first).
+        let duplicates = if reverse {
+            group.split_last().map(|(_, rest)| rest)
+        } else {
+            group.split_first().map(|(_, rest)| rest)
+        }
+        .ok_or(DoubriError::OutOfRange {
+            context: "empty bucket group",
+        })?;
+        for entry in duplicates {
+            let idx: usize = conv(entry.global_idx, "document index")?;
+            *dup_flags.get_mut(idx).ok_or(DoubriError::OutOfRange {
+                context: "duplicate flag index",
+            })? = FLAG_DUPLICATE;
+        }
+    }
+    Ok(())
+}
+
+// The split index is the low byte of the bucket value (`bv & 0xFF`).
+const _: () = assert!(NUM_INDEX_SPLITS == 256);
 
 /// Writes index files with 256-way split.
 ///
@@ -203,13 +225,24 @@ fn write_index_files(
     let mut writers: Vec<Option<BufWriter<File>>> = (0..NUM_INDEX_SPLITS).map(|_| None).collect();
 
     for values in bucket_values {
-        for (i, &bv) in values.iter().enumerate() {
-            if dup_flags[i] == FLAG_DUPLICATE {
+        // `zip` would silently truncate on a length mismatch, so reject it up front.
+        if values.len() != dup_flags.len() || values.len() != doc_locations.len() {
+            return Err(DoubriError::OutOfRange {
+                context: "index input lengths",
+            });
+        }
+        for ((&bv, &flag), loc) in values.iter().zip(dup_flags).zip(doc_locations) {
+            if flag == FLAG_DUPLICATE {
                 continue;
             }
-            let split_idx = (bv as usize) % NUM_INDEX_SPLITS;
-            if writers[split_idx].is_none() {
-                let path = idx_file_path(basename, split_idx as u8);
+            let split_byte: u8 = conv(bv & 0xFF, "index split")?;
+            let slot = writers
+                .get_mut(usize::from(split_byte))
+                .ok_or(DoubriError::OutOfRange {
+                    context: "index split",
+                })?;
+            if slot.is_none() {
+                let path = idx_file_path(basename, split_byte);
                 let file_exists = Path::new(&path).exists();
                 let mut writer = BufWriter::new(
                     std::fs::OpenOptions::new()
@@ -220,10 +253,11 @@ fn write_index_files(
                 if !file_exists {
                     write_idx_header(&mut writer)?;
                 }
-                writers[split_idx] = Some(writer);
+                *slot = Some(writer);
             }
-            let loc = &doc_locations[i];
-            let writer = writers[split_idx].as_mut().expect("writer opened above");
+            let writer = slot.as_mut().ok_or(DoubriError::OutOfRange {
+                context: "index writer",
+            })?;
             write_idx_entry(
                 writer,
                 &IndexEntry {
@@ -243,6 +277,10 @@ fn write_index_files(
 }
 
 /// Reads a list of hash file paths from stdin.
+///
+/// # Errors
+///
+/// Returns an error if reading a line fails.
 pub fn read_hash_file_list<R: BufRead>(reader: R) -> Result<Vec<PathBuf>, DoubriError> {
     let mut paths = Vec::new();
     for line in reader.lines() {
@@ -266,6 +304,11 @@ pub fn read_hash_file_list<R: BufRead>(reader: R) -> Result<Vec<PathBuf>, Doubri
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 mod tests {
@@ -284,7 +327,7 @@ mod tests {
 
         let mut jsonl = String::new();
         for text in texts {
-            jsonl.push_str(&format!("{{\"text\":\"{}\"}}\n", text));
+            jsonl.push_str(&format!("{{\"text\":\"{text}\"}}\n"));
         }
 
         let path = dir.join(name);
@@ -314,7 +357,7 @@ mod tests {
         // (though with small params, collisions are possible)
 
         // Verify .dup file exists
-        let dup_path = format!("{}.dup", basename);
+        let dup_path = format!("{basename}.dup");
         let flags = read_dup_flags(&mut File::open(&dup_path).unwrap()).unwrap();
         assert_eq!(flags.len(), 3);
     }
@@ -342,7 +385,7 @@ mod tests {
         );
 
         // Verify: first occurrence should be unique, second should be duplicate
-        let dup_path = format!("{}.dup", basename);
+        let dup_path = format!("{basename}.dup");
         let flags = read_dup_flags(&mut File::open(&dup_path).unwrap()).unwrap();
         assert_eq!(flags[0], FLAG_UNIQUE);
         assert_eq!(flags[1], FLAG_DUPLICATE);
@@ -366,7 +409,7 @@ mod tests {
         assert_eq!(result.total_documents, 2);
         assert_eq!(result.duplicate_count, 1);
 
-        let dup_path = format!("{}.dup", basename);
+        let dup_path = format!("{basename}.dup");
         let flags = read_dup_flags(&mut File::open(&dup_path).unwrap()).unwrap();
         // reverse: first one is marked as duplicate, second is kept
         assert_eq!(flags[0], FLAG_DUPLICATE);
@@ -394,7 +437,7 @@ mod tests {
         assert_eq!(result.duplicate_count, 1);
 
         // Verify .src file
-        let src_path = format!("{}.src", basename);
+        let src_path = format!("{basename}.src");
         let entries = read_src_file(&mut File::open(&src_path).unwrap()).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].item_count, 1);
@@ -409,7 +452,7 @@ mod tests {
         let basename = dir.path().join("output").to_string_lossy().to_string();
         dedup_group(std::slice::from_ref(&hash_path), &basename, false).unwrap();
 
-        let src_path = format!("{}.src", basename);
+        let src_path = format!("{basename}.src");
         let entries = read_src_file(&mut File::open(&src_path).unwrap()).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].item_count, 1);
@@ -435,8 +478,7 @@ mod tests {
         let err = dedup_group(&[], "output", false).unwrap_err();
         assert!(
             matches!(err, DoubriError::Config { .. }),
-            "expected Config error for no hash files, got {:?}",
-            err
+            "expected Config error for no hash files, got {err:?}"
         );
     }
 
@@ -450,7 +492,7 @@ mod tests {
     ) -> PathBuf {
         let mut jsonl = String::new();
         for text in texts {
-            jsonl.push_str(&format!("{{\"text\":\"{}\"}}\n", text));
+            jsonl.push_str(&format!("{{\"text\":\"{text}\"}}\n"));
         }
         let path = dir.join(name);
         let mut file = File::create(&path).unwrap();
@@ -480,8 +522,7 @@ mod tests {
         let err = dedup_group(&[path_a, path_b], &basename, false).unwrap_err();
         assert!(
             matches!(err, DoubriError::Config { .. }),
-            "expected Config error for mismatched configs, got {:?}",
-            err
+            "expected Config error for mismatched configs, got {err:?}"
         );
     }
 
@@ -497,7 +538,7 @@ mod tests {
         assert_eq!(result.total_documents, 3);
         assert_eq!(result.duplicate_count, 2);
 
-        let flags = read_dup_flags(&mut File::open(format!("{}.dup", basename)).unwrap()).unwrap();
+        let flags = read_dup_flags(&mut File::open(format!("{basename}.dup")).unwrap()).unwrap();
         assert_eq!(flags, vec![FLAG_UNIQUE, FLAG_DUPLICATE, FLAG_DUPLICATE]);
     }
 
@@ -513,7 +554,7 @@ mod tests {
         assert_eq!(result.total_documents, 3);
         assert_eq!(result.duplicate_count, 2);
 
-        let flags = read_dup_flags(&mut File::open(format!("{}.dup", basename)).unwrap()).unwrap();
+        let flags = read_dup_flags(&mut File::open(format!("{basename}.dup")).unwrap()).unwrap();
         assert_eq!(flags, vec![FLAG_DUPLICATE, FLAG_DUPLICATE, FLAG_UNIQUE]);
     }
 
@@ -536,7 +577,7 @@ mod tests {
         let basename = dir.path().join("output").to_string_lossy().to_string();
         dedup_group(&[hash_path], &basename, false).unwrap();
 
-        let flags = read_dup_flags(&mut File::open(format!("{}.dup", basename)).unwrap()).unwrap();
+        let flags = read_dup_flags(&mut File::open(format!("{basename}.dup")).unwrap()).unwrap();
         let unique_count = flags.iter().filter(|&&f| f == FLAG_UNIQUE).count();
 
         let mut total_entries = 0usize;
@@ -598,9 +639,9 @@ mod tests {
             let header = read_hash_header(&mut file).unwrap();
             let sigs = read_hash_data(&mut file, &header).unwrap();
             for doc_idx in 0..header.num_documents as usize {
-                let sig = signature_slice(&sigs, doc_idx, config.total_hashes());
+                let sig = signature_slice(&sigs, doc_idx, config.total_hashes().unwrap()).unwrap();
                 let bvs = (0..config.num_buckets)
-                    .map(|b| bucket_value(sig, b, &config))
+                    .map(|b| bucket_value(sig, b, &config).unwrap())
                     .collect();
                 docs.push((source_idx as u32, doc_idx as u32, bvs));
             }
@@ -622,7 +663,7 @@ mod tests {
         let basename = dir.path().join("output").to_string_lossy().to_string();
         dedup_group(&[path_a, path_b], &basename, false).unwrap();
 
-        let flags = read_dup_flags(&mut File::open(format!("{}.dup", basename)).unwrap()).unwrap();
+        let flags = read_dup_flags(&mut File::open(format!("{basename}.dup")).unwrap()).unwrap();
         let expected_flags: Vec<u8> = expected_dup
             .iter()
             .map(|&d| if d { FLAG_DUPLICATE } else { FLAG_UNIQUE })

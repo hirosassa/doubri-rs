@@ -4,12 +4,12 @@ use std::io::{BufRead, Write};
 use rayon::prelude::*;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::error::DoubriError;
+use crate::error::{DoubriError, conv};
 use crate::format::{HashFileHeader, write_hash_data, write_hash_header};
 use crate::hash::xxhash64;
 use crate::ngram::char_ngrams;
 
-/// Configuration for MinHash computation.
+/// Configuration for `MinHash` computation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MinHashConfig {
     /// N-gram size (default: 5).
@@ -31,23 +31,35 @@ impl Default for MinHashConfig {
 }
 
 impl MinHashConfig {
-    /// Total number of hash functions (num_buckets * band_size).
-    pub const fn total_hashes(&self) -> usize {
-        self.num_buckets * self.band_size
+    /// Total number of hash functions (`num_buckets` * `band_size`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DoubriError::Overflow`] if the product does not fit in `usize`.
+    pub fn total_hashes(&self) -> Result<usize, DoubriError> {
+        self.num_buckets
+            .checked_mul(self.band_size)
+            .ok_or(DoubriError::Overflow {
+                context: "total hash count",
+            })
     }
 }
 
-/// Computes a MinHash signature from text.
+/// Computes a `MinHash` signature from text.
 ///
 /// Returns a `Vec<u64>` of length `num_buckets * band_size`.
-/// Layout is bucket-major: [bucket0_hash0, bucket0_hash1, ..., bucket0_hashB, bucket1_hash0, ...]
+/// Layout is bucket-major: [`bucket0_hash0`, `bucket0_hash1`, ..., `bucket0_hashB`, `bucket1_hash0`, ...]
 ///
-/// Each hash function h_i is defined as `xxhash64(ngram_bytes, seed=i)`.
+/// Each hash function `h_i` is defined as `xxhash64(ngram_bytes, seed=i)`.
 /// For each hash function, the minimum value across all n-grams is kept.
 ///
 /// If no n-grams exist (text too short), all values are `u64::MAX`.
-pub fn compute_minhash(text: &str, config: &MinHashConfig) -> Vec<u64> {
-    let total = config.total_hashes();
+///
+/// # Errors
+///
+/// Returns an error if the config's total hash count overflows `usize`.
+pub fn compute_minhash(text: &str, config: &MinHashConfig) -> Result<Vec<u64>, DoubriError> {
+    let total = config.total_hashes()?;
     let mut signature = vec![u64::MAX; total];
 
     // Deduplicate n-grams to avoid redundant hash computations
@@ -60,8 +72,9 @@ pub fn compute_minhash(text: &str, config: &MinHashConfig) -> Vec<u64> {
         let ngram_bytes = ngram.as_bytes();
 
         // Compute all hash values for this n-gram
-        for (i, h) in hashes.iter_mut().enumerate() {
-            *h = xxhash64(ngram_bytes, i as u64);
+        // The hash function index is the xxHash seed.
+        for (seed, h) in (0u64..).zip(hashes.iter_mut()) {
+            *h = xxhash64(ngram_bytes, seed);
         }
 
         // Update minimum values (separated loop enables auto-vectorization)
@@ -70,25 +83,42 @@ pub fn compute_minhash(text: &str, config: &MinHashConfig) -> Vec<u64> {
         }
     }
 
-    signature
+    Ok(signature)
 }
 
-/// Extracts a bucket value from a MinHash signature.
+/// Extracts a bucket value from a `MinHash` signature.
 ///
 /// `signature` is a slice of length `total_hashes` for a single document.
 /// The bucket value is computed by concatenating the `band_size` hash values
 /// within the bucket and hashing them. Matching bucket values indicate candidate similar documents.
-pub fn bucket_value(signature: &[u64], bucket_idx: usize, config: &MinHashConfig) -> u64 {
-    let start = bucket_idx * config.band_size;
-    let end = start + config.band_size;
-    let band = &signature[start..end];
+///
+/// # Errors
+///
+/// Returns an error if the band `bucket_idx` lies outside `signature` or its offset overflows.
+pub fn bucket_value(
+    signature: &[u64],
+    bucket_idx: usize,
+    config: &MinHashConfig,
+) -> Result<u64, DoubriError> {
+    let overflow = DoubriError::Overflow {
+        context: "bucket offset",
+    };
+    let start = bucket_idx
+        .checked_mul(config.band_size)
+        .ok_or(DoubriError::Overflow {
+            context: "bucket offset",
+        })?;
+    let end = start.checked_add(config.band_size).ok_or(overflow)?;
+    let band = signature.get(start..end).ok_or(DoubriError::OutOfRange {
+        context: "bucket band",
+    })?;
 
     // Stream band hash values directly into the hasher without heap allocation
     let mut hasher = Xxh3::with_seed(0);
     for &h in band {
         hasher.update(&h.to_le_bytes());
     }
-    hasher.digest()
+    Ok(hasher.digest())
 }
 
 /// Computes the bucket value of one document from a band stored row-major.
@@ -96,34 +126,74 @@ pub fn bucket_value(signature: &[u64], bucket_idx: usize, config: &MinHashConfig
 /// `rows` holds `band_size` rows of `num_docs` values each (hash-index-major),
 /// so the band of document `doc_idx` is `rows[r * num_docs + doc_idx]` for each row `r`.
 /// The result equals `bucket_value` on the same band.
+///
+/// # Errors
+///
+/// Returns an error if `doc_idx >= num_docs` or `rows` holds fewer than `band_size` rows.
 #[inline]
 pub fn bucket_value_from_rows(
     rows: &[u64],
     num_docs: usize,
     band_size: usize,
     doc_idx: usize,
-) -> u64 {
-    let mut hasher = Xxh3::with_seed(0);
-    for r in 0..band_size {
-        hasher.update(&rows[r * num_docs + doc_idx].to_le_bytes());
+) -> Result<u64, DoubriError> {
+    if doc_idx >= num_docs {
+        return Err(DoubriError::OutOfRange {
+            context: "document index in rows",
+        });
     }
-    hasher.digest()
+    // Walk down the column of `doc_idx` without index arithmetic: skip to the first row's
+    // value, then step one full row (`num_docs` values) at a time. `num_docs > doc_idx >= 0`
+    // guarantees a non-zero step.
+    let mut column = rows.iter().skip(doc_idx).step_by(num_docs);
+    let mut hasher = Xxh3::with_seed(0);
+    for _ in 0..band_size {
+        let value = column.next().ok_or(DoubriError::OutOfRange {
+            context: "band row",
+        })?;
+        hasher.update(&value.to_le_bytes());
+    }
+    Ok(hasher.digest())
 }
 
 /// Returns the signature slice for a given document from a flat signatures array.
+///
+/// # Errors
+///
+/// Returns an error if the slice would lie outside `signatures` or its offset overflows.
 #[inline]
-pub fn signature_slice(signatures: &[u64], doc_idx: usize, total_hashes: usize) -> &[u64] {
-    let start = doc_idx * total_hashes;
-    &signatures[start..start + total_hashes]
+pub fn signature_slice(
+    signatures: &[u64],
+    doc_idx: usize,
+    total_hashes: usize,
+) -> Result<&[u64], DoubriError> {
+    let start = doc_idx
+        .checked_mul(total_hashes)
+        .ok_or(DoubriError::Overflow {
+            context: "signature offset",
+        })?;
+    let end = start
+        .checked_add(total_hashes)
+        .ok_or(DoubriError::Overflow {
+            context: "signature offset",
+        })?;
+    signatures.get(start..end).ok_or(DoubriError::OutOfRange {
+        context: "signature slice",
+    })
 }
 
 /// Number of JSONL lines read before their signatures are computed in parallel.
 const JSONL_CHUNK_SIZE: usize = 1024;
 
-/// Reads a JSONL stream, computes MinHash signatures, and writes them to a hash file.
+/// Reads a JSONL stream, computes `MinHash` signatures, and writes them to a hash file.
 ///
 /// Each line must be a JSON object with a text field specified by `text_field`.
 /// Signatures are computed in parallel; the output order matches the input order.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure, malformed JSON, a missing text field, or when the
+/// config or document count overflows.
 pub fn process_jsonl<R: BufRead, W: Write>(
     reader: R,
     writer: &mut W,
@@ -142,7 +212,7 @@ fn process_jsonl_chunked<R: BufRead, W: Write>(
     chunk_size: usize,
 ) -> Result<u64, DoubriError> {
     let chunk_size = chunk_size.max(1);
-    let total_hashes = config.total_hashes();
+    let total_hashes = config.total_hashes()?;
     let mut signatures: Vec<u64> = Vec::new();
     let mut num_documents = 0u64;
 
@@ -176,7 +246,9 @@ fn process_jsonl_chunked<R: BufRead, W: Write>(
             .collect();
         for result in results {
             signatures.extend_from_slice(&result?);
-            num_documents += 1;
+            num_documents = num_documents.checked_add(1).ok_or(DoubriError::Overflow {
+                context: "document count",
+            })?;
         }
 
         if let Some(e) = read_error {
@@ -186,13 +258,18 @@ fn process_jsonl_chunked<R: BufRead, W: Write>(
 
     let header = HashFileHeader {
         num_documents,
-        ngram_size: config.ngram_size as u32,
-        num_buckets: config.num_buckets as u32,
-        band_size: config.band_size as u32,
+        ngram_size: conv(config.ngram_size, "ngram size")?,
+        num_buckets: conv(config.num_buckets, "bucket count")?,
+        band_size: conv(config.band_size, "band size")?,
     };
 
     write_hash_header(writer, &header)?;
-    write_hash_data(writer, &signatures, num_documents as usize, total_hashes)?;
+    write_hash_data(
+        writer,
+        &signatures,
+        conv(num_documents, "document count")?,
+        total_hashes,
+    )?;
 
     Ok(num_documents)
 }
@@ -209,7 +286,7 @@ fn signature_for_line(
         .ok_or_else(|| DoubriError::MissingField {
             field: text_field.to_string(),
         })?;
-    Ok(compute_minhash(text, config))
+    compute_minhash(text, config)
 }
 
 #[cfg(test)]
@@ -223,6 +300,11 @@ fn signature_for_line(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 mod tests {
@@ -235,8 +317,8 @@ mod tests {
             num_buckets: 5,
             band_size: 4,
         };
-        let sig1 = compute_minhash("hello world foo bar", &config);
-        let sig2 = compute_minhash("hello world foo bar", &config);
+        let sig1 = compute_minhash("hello world foo bar", &config).unwrap();
+        let sig2 = compute_minhash("hello world foo bar", &config).unwrap();
         assert_eq!(sig1, sig2);
     }
 
@@ -247,8 +329,8 @@ mod tests {
             num_buckets: 5,
             band_size: 4,
         };
-        let sig1 = compute_minhash("hello world foo bar", &config);
-        let sig2 = compute_minhash("completely different text here", &config);
+        let sig1 = compute_minhash("hello world foo bar", &config).unwrap();
+        let sig2 = compute_minhash("completely different text here", &config).unwrap();
         assert_ne!(sig1, sig2);
     }
 
@@ -259,7 +341,7 @@ mod tests {
             num_buckets: 10,
             band_size: 3,
         };
-        let sig = compute_minhash("this is a test sentence for minhash", &config);
+        let sig = compute_minhash("this is a test sentence for minhash", &config).unwrap();
         assert_eq!(sig.len(), 30); // 10 * 3
     }
 
@@ -271,7 +353,7 @@ mod tests {
             band_size: 2,
         };
         // "ab" has no 5-grams
-        let sig = compute_minhash("ab", &config);
+        let sig = compute_minhash("ab", &config).unwrap();
         assert!(sig.iter().all(|&v| v == u64::MAX));
     }
 
@@ -283,12 +365,14 @@ mod tests {
             band_size: 2,
         };
         // Nearly identical texts
-        let sig1 = compute_minhash("the quick brown fox jumps over the lazy dog", &config);
-        let sig2 = compute_minhash("the quick brown fox jumps over the lazy cat", &config);
+        let sig1 = compute_minhash("the quick brown fox jumps over the lazy dog", &config).unwrap();
+        let sig2 = compute_minhash("the quick brown fox jumps over the lazy cat", &config).unwrap();
 
         // Should share at least one bucket value
         let shared = (0..config.num_buckets)
-            .filter(|&b| bucket_value(&sig1, b, &config) == bucket_value(&sig2, b, &config))
+            .filter(|&b| {
+                bucket_value(&sig1, b, &config).unwrap() == bucket_value(&sig2, b, &config).unwrap()
+            })
             .count();
         assert!(shared > 0, "Similar texts should share at least one bucket");
     }
@@ -300,9 +384,9 @@ mod tests {
             num_buckets: 5,
             band_size: 4,
         };
-        let sig = compute_minhash("hello world", &config);
-        let bv1 = bucket_value(&sig, 0, &config);
-        let bv2 = bucket_value(&sig, 0, &config);
+        let sig = compute_minhash("hello world", &config).unwrap();
+        let bv1 = bucket_value(&sig, 0, &config).unwrap();
+        let bv2 = bucket_value(&sig, 0, &config).unwrap();
         assert_eq!(bv1, bv2);
     }
 
@@ -313,9 +397,9 @@ mod tests {
             num_buckets: 5,
             band_size: 4,
         };
-        let sig = compute_minhash("hello world this is a longer text", &config);
-        let bv0 = bucket_value(&sig, 0, &config);
-        let bv1 = bucket_value(&sig, 1, &config);
+        let sig = compute_minhash("hello world this is a longer text", &config).unwrap();
+        let bv0 = bucket_value(&sig, 0, &config).unwrap();
+        let bv1 = bucket_value(&sig, 1, &config).unwrap();
         // Different buckets should generally produce different values
         // (not guaranteed but extremely likely)
         assert_ne!(bv0, bv1);
@@ -328,7 +412,7 @@ mod tests {
             num_buckets: 5,
             band_size: 4,
         };
-        let sig = compute_minhash("日本語のテキストで動作確認", &config);
+        let sig = compute_minhash("日本語のテキストで動作確認", &config).unwrap();
         assert_eq!(sig.len(), 20);
         // Should have actual hash values, not all MAX
         assert!(sig.iter().any(|&v| v != u64::MAX));
@@ -340,7 +424,7 @@ mod tests {
         assert_eq!(config.ngram_size, 5);
         assert_eq!(config.num_buckets, 40);
         assert_eq!(config.band_size, 20);
-        assert_eq!(config.total_hashes(), 800);
+        assert_eq!(config.total_hashes().unwrap(), 800);
     }
 
     #[test]
@@ -382,8 +466,8 @@ mod tests {
         assert_eq!(sigs.len(), 2 * total_hashes);
 
         // Verify signatures match direct computation
-        let expected_sig1 = compute_minhash("hello world", &config);
-        let expected_sig2 = compute_minhash("foo bar baz", &config);
+        let expected_sig1 = compute_minhash("hello world", &config).unwrap();
+        let expected_sig2 = compute_minhash("foo bar baz", &config).unwrap();
         assert_eq!(&sigs[0..total_hashes], &expected_sig1[..]);
         assert_eq!(&sigs[total_hashes..2 * total_hashes], &expected_sig2[..]);
     }
@@ -427,8 +511,7 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(err, DoubriError::MissingField { ref field } if field == "text"),
-            "expected MissingField for absent text field, got {:?}",
-            err
+            "expected MissingField for absent text field, got {err:?}"
         );
     }
 
@@ -452,8 +535,7 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(err, DoubriError::MissingField { ref field } if field == "text"),
-            "expected MissingField for non-string text field, got {:?}",
-            err
+            "expected MissingField for non-string text field, got {err:?}"
         );
     }
 
@@ -476,8 +558,7 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(err, DoubriError::Json(_)),
-            "expected Json error for malformed line, got {:?}",
-            err
+            "expected Json error for malformed line, got {err:?}"
         );
     }
 
@@ -515,7 +596,7 @@ mod tests {
             num_buckets: 2,
             band_size: 2,
         };
-        let total_hashes = config.total_hashes();
+        let total_hashes = config.total_hashes().unwrap();
         let texts = [
             "alpha beta",
             "gamma delta",
@@ -553,7 +634,7 @@ mod tests {
             for (i, t) in texts.iter().enumerate() {
                 assert_eq!(
                     &sigs[i * total_hashes..(i + 1) * total_hashes],
-                    &compute_minhash(t, &config)[..],
+                    &compute_minhash(t, &config).unwrap()[..],
                     "document {i} with chunk_size {chunk_size}"
                 );
             }
@@ -659,7 +740,7 @@ mod tests {
         for (bucket_idx, band) in signature.chunks(config.band_size).enumerate() {
             let bytes: Vec<u8> = band.iter().flat_map(|h| h.to_le_bytes()).collect();
             assert_eq!(
-                bucket_value(&signature, bucket_idx, &config),
+                bucket_value(&signature, bucket_idx, &config).unwrap(),
                 xxhash_rust::xxh3::xxh3_64_with_seed(&bytes, 0),
                 "bucket {bucket_idx}"
             );
@@ -673,7 +754,7 @@ mod tests {
             num_buckets: 3,
             band_size: 4,
         };
-        let total_hashes = config.total_hashes();
+        let total_hashes = config.total_hashes().unwrap();
         let num_docs = 5;
         let signatures: Vec<u64> = (0..num_docs * total_hashes)
             .map(|k| (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
@@ -689,15 +770,97 @@ mod tests {
             }
             for doc in 0..num_docs {
                 let expected = bucket_value(
-                    signature_slice(&signatures, doc, total_hashes),
+                    signature_slice(&signatures, doc, total_hashes).unwrap(),
                     bucket_idx,
                     &config,
-                );
+                )
+                .unwrap();
                 assert_eq!(
-                    bucket_value_from_rows(&rows, num_docs, config.band_size, doc),
+                    bucket_value_from_rows(&rows, num_docs, config.band_size, doc).unwrap(),
                     expected
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_total_hashes_overflow_is_error() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: usize::MAX,
+            band_size: 2,
+        };
+        assert!(matches!(
+            config.total_hashes(),
+            Err(DoubriError::Overflow { .. })
+        ));
+        assert!(compute_minhash("hello", &config).is_err());
+    }
+
+    #[test]
+    fn test_bucket_value_out_of_range_is_error() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        let sig = vec![1u64; 4];
+        assert!(bucket_value(&sig, 1, &config).is_ok());
+        assert!(matches!(
+            bucket_value(&sig, 2, &config),
+            Err(DoubriError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            bucket_value(&sig, usize::MAX, &config),
+            Err(DoubriError::Overflow { .. })
+        ));
+    }
+
+    #[test]
+    fn test_bucket_value_from_rows_invalid_input_is_error() {
+        // 2 rows x 3 docs.
+        let rows = vec![1u64, 2, 3, 4, 5, 6];
+        assert!(bucket_value_from_rows(&rows, 3, 2, 2).is_ok());
+        assert!(
+            bucket_value_from_rows(&rows, 3, 2, 3).is_err(),
+            "doc out of range"
+        );
+        assert!(
+            bucket_value_from_rows(&rows, 0, 2, 0).is_err(),
+            "no documents"
+        );
+        assert!(
+            bucket_value_from_rows(&rows, 3, 3, 0).is_err(),
+            "too few rows"
+        );
+    }
+
+    #[test]
+    fn test_bucket_value_from_rows_matches_bucket_value_for_second_doc() {
+        let config = MinHashConfig {
+            ngram_size: 3,
+            num_buckets: 1,
+            band_size: 2,
+        };
+        // Two docs, band of 2 hashes: doc0 = [10, 30], doc1 = [20, 40]; rows are hash-major.
+        let rows = vec![10u64, 20, 30, 40];
+        assert_eq!(
+            bucket_value_from_rows(&rows, 2, 2, 1).unwrap(),
+            bucket_value(&[20, 40], 0, &config).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_signature_slice_out_of_range_is_error() {
+        let sigs = vec![0u64; 6];
+        assert_eq!(signature_slice(&sigs, 1, 3).unwrap().len(), 3);
+        assert!(matches!(
+            signature_slice(&sigs, 2, 3),
+            Err(DoubriError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            signature_slice(&sigs, usize::MAX, 2),
+            Err(DoubriError::Overflow { .. })
+        ));
     }
 }

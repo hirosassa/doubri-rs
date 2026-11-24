@@ -26,6 +26,10 @@ pub struct HashFileHeader {
 }
 
 /// Writes a hash file header.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn write_hash_header<W: Write>(
     writer: &mut W,
     header: &HashFileHeader,
@@ -39,12 +43,16 @@ pub fn write_hash_header<W: Write>(
 }
 
 /// Reads a hash file header.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn read_hash_header<R: Read>(reader: &mut R) -> Result<HashFileHeader, DoubriError> {
     let mut magic = [0u8; 8];
     reader.read_exact(&mut magic)?;
     if &magic != HASH_MAGIC {
         return Err(DoubriError::InvalidFormat {
-            msg: format!("invalid hash file magic: {:?}", magic),
+            msg: format!("invalid hash file magic: {magic:?}"),
         });
     }
     let num_documents = reader.read_u64::<LittleEndian>()?;
@@ -81,18 +89,34 @@ fn overflow_error(expr: &str) -> DoubriError {
 
 /// Writes bucket data to a hash file (bucket-major layout).
 ///
-/// `signatures`: flat array of MinHash signatures, length `num_docs * total_hashes`.
+/// `signatures`: flat array of `MinHash` signatures, length `num_docs * total_hashes`.
 /// Document `i`, hash function `j` is at index `i * total_hashes + j`.
 /// Output is bucket-major: all documents' values for hash 0, then hash 1, etc.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn write_hash_data<W: Write>(
     writer: &mut W,
     signatures: &[u64],
     num_docs: usize,
     total_hashes: usize,
 ) -> Result<(), DoubriError> {
+    let expected = num_docs
+        .checked_mul(total_hashes)
+        .ok_or_else(|| overflow_error("num_docs * total_hashes"))?;
+    if signatures.len() != expected {
+        return Err(DoubriError::InvalidFormat {
+            msg: format!(
+                "signature length {} does not match {num_docs} documents * {total_hashes} hashes",
+                signatures.len()
+            ),
+        });
+    }
+    // Hash `h` of every document is every `total_hashes`-th value starting at offset `h`.
     for hash_idx in 0..total_hashes {
-        for doc_idx in 0..num_docs {
-            writer.write_u64::<LittleEndian>(signatures[doc_idx * total_hashes + hash_idx])?;
+        for &value in signatures.iter().skip(hash_idx).step_by(total_hashes) {
+            writer.write_u64::<LittleEndian>(value)?;
         }
     }
     Ok(())
@@ -100,8 +124,12 @@ pub fn write_hash_data<W: Write>(
 
 /// Reads bucket data from a hash file (bucket-major layout).
 ///
-/// Returns a flat array of MinHash signatures, length `num_docs * total_hashes`.
+/// Returns a flat array of `MinHash` signatures, length `num_docs * total_hashes`.
 /// Document `i`, hash function `j` is at index `i * total_hashes + j`.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn read_hash_data<R: Read>(
     reader: &mut R,
     header: &HashFileHeader,
@@ -117,10 +145,15 @@ pub fn read_hash_data<R: Read>(
 
     // The data is now known to exist, so the final allocation is bounded by the input size.
     let mut signatures = vec![0u64; len];
-    for hash_idx in 0..total_hashes {
-        for doc_idx in 0..num_docs {
-            signatures[doc_idx * total_hashes + hash_idx] =
-                bucket_major[hash_idx * num_docs + doc_idx];
+    if len == 0 {
+        return Ok(signatures);
+    }
+    // `len > 0` means `num_docs > 0`, so the chunk size is non-zero. Each chunk is one hash
+    // function's values across documents; they land at stride `total_hashes`.
+    for (hash_idx, row) in bucket_major.chunks_exact(num_docs).enumerate() {
+        let column = signatures.iter_mut().skip(hash_idx).step_by(total_hashes);
+        for (slot, &value) in column.zip(row) {
+            *slot = value;
         }
     }
 
@@ -135,9 +168,13 @@ fn read_u64_vec<R: Read>(reader: &mut R, len: usize) -> Result<Vec<u64>, DoubriE
     let mut values: Vec<u64> = Vec::new();
     while values.len() < len {
         let start = values.len();
+        // Saturating only guards the add near `usize::MAX`; `min(len)` bounds the result.
         let end = start.saturating_add(CHUNK_VALUES).min(len);
         values.resize(end, 0);
-        reader.read_u64_into::<LittleEndian>(&mut values[start..end])?;
+        let chunk = values.get_mut(start..end).ok_or(DoubriError::OutOfRange {
+            context: "hash data chunk",
+        })?;
+        reader.read_u64_into::<LittleEndian>(chunk)?;
     }
     Ok(values)
 }
@@ -149,6 +186,10 @@ fn read_u64_vec<R: Read>(reader: &mut R, len: usize) -> Result<Vec<u64>, DoubriE
 /// document `d` is at index `r * num_documents + d`. Consecutive calls stream
 /// through the file, so a caller can process one band at a time without loading
 /// every signature.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn read_hash_rows<R: Read>(
     reader: &mut R,
     header: &HashFileHeader,
@@ -162,12 +203,20 @@ pub fn read_hash_rows<R: Read>(
 }
 
 /// Writes a .dup flag file.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn write_dup_flags<W: Write>(writer: &mut W, flags: &[u8]) -> Result<(), DoubriError> {
     writer.write_all(flags)?;
     Ok(())
 }
 
 /// Reads a .dup flag file.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn read_dup_flags<R: Read>(reader: &mut R) -> Result<Vec<u8>, DoubriError> {
     let mut flags = Vec::new();
     reader.read_to_end(&mut flags)?;
@@ -182,6 +231,10 @@ pub struct SourceEntry {
 }
 
 /// Writes a .src file.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn write_src_file<W: Write>(
     writer: &mut W,
     entries: &[SourceEntry],
@@ -193,6 +246,10 @@ pub fn write_src_file<W: Write>(
 }
 
 /// Reads a .src file.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn read_src_file<R: Read>(reader: &mut R) -> Result<Vec<SourceEntry>, DoubriError> {
     let mut content = String::new();
     reader.read_to_string(&mut content)?;
@@ -209,7 +266,7 @@ pub fn read_src_file<R: Read>(reader: &mut R) -> Result<Vec<SourceEntry>, Doubri
         let item_count = count_str
             .parse::<u64>()
             .map_err(|e| DoubriError::InvalidFormat {
-                msg: format!("invalid item count '{}': {}", count_str, e),
+                msg: format!("invalid item count '{count_str}': {e}"),
             })?;
         entries.push(SourceEntry {
             item_count,
@@ -228,24 +285,36 @@ pub struct IndexEntry {
 }
 
 /// Writes an index file header.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn write_idx_header<W: Write>(writer: &mut W) -> Result<(), DoubriError> {
     writer.write_all(IDX_MAGIC)?;
     Ok(())
 }
 
 /// Reads and validates an index file header.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn read_idx_header<R: Read>(reader: &mut R) -> Result<(), DoubriError> {
     let mut magic = [0u8; 8];
     reader.read_exact(&mut magic)?;
     if &magic != IDX_MAGIC {
         return Err(DoubriError::InvalidFormat {
-            msg: format!("invalid index file magic: {:?}", magic),
+            msg: format!("invalid index file magic: {magic:?}"),
         });
     }
     Ok(())
 }
 
 /// Writes an index entry.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn write_idx_entry<W: Write>(writer: &mut W, entry: &IndexEntry) -> Result<(), DoubriError> {
     writer.write_u32::<LittleEndian>(entry.group)?;
     writer.write_u32::<LittleEndian>(entry.item_number)?;
@@ -254,6 +323,10 @@ pub fn write_idx_entry<W: Write>(writer: &mut W, entry: &IndexEntry) -> Result<(
 }
 
 /// Reads an index entry. Returns `None` on EOF.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or malformed data.
 pub fn read_idx_entry<R: Read>(reader: &mut R) -> Result<Option<IndexEntry>, DoubriError> {
     let group = match reader.read_u32::<LittleEndian>() {
         Ok(v) => v,
@@ -273,8 +346,9 @@ pub fn read_idx_entry<R: Read>(reader: &mut R) -> Result<Option<IndexEntry>, Dou
 pub const NUM_INDEX_SPLITS: usize = 256;
 
 /// Generates an index file path (256-way split).
+#[must_use]
 pub fn idx_file_path(basename: &str, split_idx: u8) -> String {
-    format!("{}.idx.{:05}", basename, split_idx)
+    format!("{basename}.idx.{split_idx:05}")
 }
 
 #[cfg(test)]
@@ -288,6 +362,11 @@ pub fn idx_file_path(basename: &str, split_idx: u8) -> String {
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 mod tests {
@@ -452,7 +531,7 @@ mod tests {
         let entry = IndexEntry {
             group: 5,
             item_number: 42,
-            bucket_value: 0xDEADBEEF,
+            bucket_value: 0xDEAD_BEEF,
         };
 
         let mut buf = Vec::new();
@@ -556,8 +635,7 @@ mod tests {
         let err = read_src_file(&mut cursor).unwrap_err();
         assert!(
             matches!(err, DoubriError::InvalidFormat { ref msg } if msg.contains("invalid item count")),
-            "expected InvalidFormat for non-numeric count, got {:?}",
-            err
+            "expected InvalidFormat for non-numeric count, got {err:?}"
         );
     }
 
@@ -569,8 +647,7 @@ mod tests {
         let err = read_src_file(&mut cursor).unwrap_err();
         assert!(
             matches!(err, DoubriError::InvalidFormat { ref msg } if msg.contains("missing file path")),
-            "expected InvalidFormat for missing path, got {:?}",
-            err
+            "expected InvalidFormat for missing path, got {err:?}"
         );
     }
 
@@ -583,8 +660,7 @@ mod tests {
         let err = read_hash_header(&mut cursor).unwrap_err();
         assert!(
             matches!(err, DoubriError::Io(_)),
-            "expected Io error for truncated header, got {:?}",
-            err
+            "expected Io error for truncated header, got {err:?}"
         );
     }
 
@@ -603,8 +679,7 @@ mod tests {
         let err = read_hash_data(&mut cursor, &header).unwrap_err();
         assert!(
             matches!(err, DoubriError::Io(_)),
-            "expected Io error for truncated data, got {:?}",
-            err
+            "expected Io error for truncated data, got {err:?}"
         );
     }
 
@@ -618,8 +693,7 @@ mod tests {
         let err = read_idx_entry(&mut cursor).unwrap_err();
         assert!(
             matches!(err, DoubriError::Io(_)),
-            "expected Io error for partial idx entry, got {:?}",
-            err
+            "expected Io error for partial idx entry, got {err:?}"
         );
     }
 
@@ -634,10 +708,10 @@ mod tests {
         };
         let mut buf = Vec::new();
         write_hash_data(&mut buf, &[], 0, 4).unwrap();
-        assert!(buf.is_empty());
+        assert_eq!(buf, [] as [u8; 0]);
         let mut cursor = Cursor::new(&buf);
         let read_sigs = read_hash_data(&mut cursor, &header).unwrap();
-        assert!(read_sigs.is_empty());
+        assert_eq!(read_sigs, [] as [u64; 0]);
     }
 
     #[test]
@@ -655,8 +729,7 @@ mod tests {
         let err = read_idx_entry(&mut BrokenReader).unwrap_err();
         assert!(
             matches!(&err, DoubriError::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied),
-            "expected PermissionDenied Io error, got {:?}",
-            err
+            "expected PermissionDenied Io error, got {err:?}"
         );
     }
 
@@ -666,8 +739,7 @@ mod tests {
         let err = read_idx_header(&mut cursor).unwrap_err();
         assert!(
             matches!(err, DoubriError::InvalidFormat { .. }),
-            "got {:?}",
-            err
+            "got {err:?}"
         );
     }
 
@@ -728,5 +800,28 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn test_write_hash_data_rejects_length_mismatch() {
+        let mut out = Vec::new();
+        let err = write_hash_data(&mut out, &[1, 2, 3], 2, 2).unwrap_err();
+        assert!(matches!(err, DoubriError::InvalidFormat { .. }));
+        assert_eq!(out, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn test_hash_data_roundtrip_non_square() {
+        let header = HashFileHeader {
+            num_documents: 3,
+            ngram_size: 5,
+            num_buckets: 2,
+            band_size: 2,
+        };
+        let sigs: Vec<u64> = (0..12).collect();
+        let mut buf = Vec::new();
+        write_hash_data(&mut buf, &sigs, 3, 4).unwrap();
+        let read = read_hash_data(&mut Cursor::new(buf), &header).unwrap();
+        assert_eq!(read, sigs);
     }
 }

@@ -6,39 +6,16 @@ use crate::format::FLAG_UNIQUE;
 /// Outputs only non-duplicate documents based on duplicate flags (all sources at once).
 ///
 /// Each JSONL line is checked against the flags; only lines with `FLAG_UNIQUE` are output.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or when the input has more documents than `dup_flags`.
 pub fn apply_whole<R: BufRead, W: Write>(
     reader: R,
     writer: &mut W,
     dup_flags: &[u8],
 ) -> Result<u64, DoubriError> {
-    let mut output_count = 0u64;
-    let mut line_idx = 0usize;
-
-    for line in reader.lines() {
-        let line = line?;
-        if line.is_empty() {
-            continue;
-        }
-
-        if line_idx >= dup_flags.len() {
-            return Err(DoubriError::InvalidFormat {
-                msg: format!(
-                    "more documents ({}) than flags ({})",
-                    line_idx + 1,
-                    dup_flags.len()
-                ),
-            });
-        }
-
-        if dup_flags[line_idx] == FLAG_UNIQUE {
-            writeln!(writer, "{}", line)?;
-            output_count += 1;
-        }
-
-        line_idx += 1;
-    }
-
-    Ok(output_count)
+    apply_from(reader, writer, dup_flags, 0, "more documents than flags")
 }
 
 /// Outputs only non-duplicate documents for a specific source based on duplicate flags.
@@ -46,14 +23,35 @@ pub fn apply_whole<R: BufRead, W: Write>(
 /// - `reader`: JSONL stream for the target source.
 /// - `dup_flags`: full flag array.
 /// - `offset`: starting position of this source within the flag array.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or when a document index (offset included) is outside
+/// `dup_flags`.
 pub fn apply_each<R: BufRead, W: Write>(
     reader: R,
     writer: &mut W,
     dup_flags: &[u8],
     offset: usize,
 ) -> Result<u64, DoubriError> {
+    apply_from(
+        reader,
+        writer,
+        dup_flags,
+        offset,
+        "document index exceeds flag count",
+    )
+}
+
+fn apply_from<R: BufRead, W: Write>(
+    reader: R,
+    writer: &mut W,
+    dup_flags: &[u8],
+    offset: usize,
+    exceed_msg: &str,
+) -> Result<u64, DoubriError> {
     let mut output_count = 0u64;
-    let mut doc_idx = 0usize;
+    let mut flag_idx = offset;
 
     for line in reader.lines() {
         let line = line?;
@@ -61,23 +59,25 @@ pub fn apply_each<R: BufRead, W: Write>(
             continue;
         }
 
-        let flag_idx = offset + doc_idx;
-        if flag_idx >= dup_flags.len() {
-            return Err(DoubriError::InvalidFormat {
+        let flag = dup_flags
+            .get(flag_idx)
+            .ok_or_else(|| DoubriError::InvalidFormat {
                 msg: format!(
-                    "document index {} exceeds flag count {}",
-                    flag_idx,
+                    "{exceed_msg}: index {flag_idx}, flag count {}",
                     dup_flags.len()
                 ),
-            });
+            })?;
+
+        if *flag == FLAG_UNIQUE {
+            writeln!(writer, "{line}")?;
+            output_count = output_count.checked_add(1).ok_or(DoubriError::Overflow {
+                context: "apply output count",
+            })?;
         }
 
-        if dup_flags[flag_idx] == FLAG_UNIQUE {
-            writeln!(writer, "{}", line)?;
-            output_count += 1;
-        }
-
-        doc_idx += 1;
+        flag_idx = flag_idx.checked_add(1).ok_or(DoubriError::Overflow {
+            context: "apply flag index",
+        })?;
     }
 
     Ok(output_count)
@@ -94,6 +94,11 @@ pub fn apply_each<R: BufRead, W: Write>(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 mod tests {
@@ -159,7 +164,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(count, 0);
-        assert!(output.is_empty());
+        assert_eq!(output, [] as [u8; 0]);
     }
 
     #[test]
@@ -237,8 +242,7 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(err, DoubriError::InvalidFormat { .. }),
-            "expected InvalidFormat when doc index exceeds flags, got {:?}",
-            err
+            "expected InvalidFormat when doc index exceeds flags, got {err:?}"
         );
     }
 
@@ -273,5 +277,18 @@ mod tests {
 
         assert_eq!(count, 1);
         assert_eq!(String::from_utf8(output).unwrap(), "{\"text\":\"doc_b\"}\n");
+    }
+
+    #[test]
+    fn test_apply_each_offset_at_usize_max_is_error() {
+        let mut output = Vec::new();
+        let err = apply_each(
+            std::io::BufReader::new(&b"{\"text\":\"doc\"}\n"[..]),
+            &mut output,
+            &[FLAG_UNIQUE],
+            usize::MAX,
+        )
+        .unwrap_err();
+        assert!(matches!(err, DoubriError::InvalidFormat { .. }));
     }
 }
