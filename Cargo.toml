@@ -22,6 +22,7 @@ overflow-checks = true
 #   - as_conversions, cast_*: deliberate, documented conversions only (hot paths where
 #     TryFrom is measurably costly, or an intentional truncation)
 # Never excepted: unwrap_used, expect_used, panic, unreachable, todo, unimplemented, string_slice.
+# MSRV is 1.88 (set per crate): dev-dependency proptest requires 1.88; edition 2024 needs >= 1.85.
 [workspace.lints.rust]
 warnings = "deny"
 unsafe_code = "forbid"
