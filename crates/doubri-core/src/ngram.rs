@@ -6,7 +6,10 @@ pub fn char_ngrams(text: &str, n: usize) -> impl Iterator<Item = &str> {
     if n == 0 || text.len() < n {
         CharNgrams::Empty
     } else if text.is_ascii() {
-        // `text.len() >= n` was checked above, so this cannot underflow.
+        // Contract for `AsciiNgramIter`: `1 <= n <= text.len()` (checked above), so
+        // `last = len - n` cannot underflow (`saturating_sub` is only a belt-and-braces
+        // spelling), and every window start `s <= last` gives `s + n <= len` and
+        // `s + 1 <= len`: none of the offset sums in the iterator can overflow `usize`.
         let last = text.len().saturating_sub(n);
         CharNgrams::Ascii(AsciiNgramIter {
             text,
@@ -71,11 +74,15 @@ impl<'a> Iterator for CharNgrams<'a> {
     }
 }
 
+/// Invariants, established once by `char_ngrams` and never broken afterwards:
+/// `text` is ASCII, `1 <= n <= text.len()`, `last == text.len() - n`, `0 <= pos <= last + 1`.
+/// They imply `pos + n <= text.len()` while `pos <= last`, which is why the hot loop may use
+/// `wrapping_add` (equal to `+` here, without the release-mode overflow check).
 struct AsciiNgramIter<'a> {
     text: &'a str,
     n: usize,
     pos: usize,
-    /// Largest valid window start: `text.len() - n` (validated once in `char_ngrams`).
+    /// Largest valid window start: `text.len() - n`.
     last: usize,
 }
 
@@ -88,10 +95,10 @@ impl<'a> Iterator for AsciiNgramIter<'a> {
             return None;
         }
         let start = self.pos;
-        // `start <= last = len - n`, so neither `start + 1` (`start < len`) nor
-        // `start + n` (`<= len`) can wrap; `wrapping_add` avoids the release-mode
-        // overflow check in this hot loop. ASCII text has a char boundary at every
-        // offset, so `get` only fails for an out-of-range window, which cannot occur.
+        // Struct invariants: `start <= last = len - n`, hence `start + 1 <= len` and
+        // `start + n <= len` cannot wrap; `wrapping_add` is exactly `+` and only avoids the
+        // release-mode overflow check in this hot loop. ASCII text has a char boundary at
+        // every offset, so `get` only fails for an out-of-range window, which cannot occur.
         self.pos = start.wrapping_add(1);
         self.text.get(start..start.wrapping_add(self.n))
     }
@@ -108,7 +115,8 @@ impl<'a> Iterator for AsciiNgramIter<'a> {
         F: FnMut(B, Self::Item) -> B,
     {
         let mut acc = init;
-        // `last < len`, so `last + 1` cannot wrap. Same window/boundary reasoning as `next`.
+        // Struct invariants: `last = len - n < len`, so `last + 1` cannot wrap, and for every
+        // `start <= last`, `start + n <= len`. Same window/boundary reasoning as `next`.
         for start in self.pos..self.last.wrapping_add(1) {
             match self.text.get(start..start.wrapping_add(self.n)) {
                 Some(ngram) => acc = f(acc, ngram),

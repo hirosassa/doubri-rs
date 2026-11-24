@@ -16,6 +16,8 @@
     reason = "test code"
 )]
 
+use std::hint::black_box;
+
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use doubri_core::minhash::{MinHashConfig, compute_minhash};
@@ -47,7 +49,9 @@ fn bench_char_ngrams(c: &mut Criterion) {
         let text = generate_ascii_text(size);
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_with_input(BenchmarkId::new("ascii/n5", size), &text, |b, text| {
-            b.iter(|| char_ngrams(text, 5).count());
+            // Consume every n-gram: `count()` is O(1) for an exact-size iterator and would not
+            // measure generation.
+            b.iter(|| char_ngrams(text, 5).fold(0usize, |acc, g| acc ^ black_box(g).len()));
         });
     }
     group.finish();
