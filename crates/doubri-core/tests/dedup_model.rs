@@ -1,3 +1,16 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "test code"
+)]
+
 //! Property tests comparing `dedup_group` against a simple exact-match reference model.
 //!
 //! Documents are drawn from a pool of mutually dissimilar texts, so MinHash/LSH

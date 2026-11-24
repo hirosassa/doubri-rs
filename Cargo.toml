@@ -8,3 +8,48 @@ tag-name = "v{{version}}"
 
 [profile.release]
 lto = "thin"
+# Runtime backstop for arithmetic_side_effects: trap instead of wrapping silently.
+overflow-checks = true
+
+# Hardening lints (rust-hardening). Test code (#[cfg(test)], tests/, benches/)
+# relaxes them with a scoped #[allow(.., reason = "test code")].
+#
+# Production allowlist: the ONLY lints that may be excepted in non-test code, and only
+# via the narrowest-scope #[expect(.., reason = "..")] (never module-wide):
+#   - arithmetic_side_effects: f32/f64 float math only (integers must use checked_*/wrapping_*
+#     with a documented contract)
+#   - indexing_slicing: constant indices into fixed-size [_; N] arrays only
+#   - as_conversions, cast_*: deliberate, documented conversions only (hot paths where
+#     TryFrom is measurably costly, or an intentional truncation)
+# Never excepted: unwrap_used, expect_used, panic, unreachable, todo, unimplemented, string_slice.
+# MSRV is 1.88 (set per crate): dev-dependency proptest requires 1.88; edition 2024 needs >= 1.85.
+[workspace.lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_in_result = "deny"
+let_underscore_must_use = "deny"
+cast_lossless = "warn"
+float_cmp = "deny"
+lossy_float_literal = "deny"
+allow_attributes_without_reason = "deny"
+
+# RATCHET: these gates are staged in so that every PR in the hardening stack stays green.
+# They are flipped to "deny" (and pedantic to "warn") by the final code-fix PR, which
+# removes this block.
+expect_used = "allow"
+indexing_slicing = "allow"
+string_slice = "allow"
+arithmetic_side_effects = "allow"
+as_conversions = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+pedantic = { level = "allow", priority = -1 }

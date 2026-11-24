@@ -84,6 +84,18 @@ pub fn apply_each<R: BufRead, W: Write>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::format::{FLAG_DUPLICATE, FLAG_UNIQUE};
