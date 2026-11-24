@@ -15,7 +15,7 @@ pub struct DedupArgs {
     pub reverse: bool,
 }
 
-pub fn run(args: DedupArgs) -> Result<()> {
+pub fn run(args: &DedupArgs) -> Result<()> {
     let paths = {
         let stdin = io::stdin();
         let reader = BufReader::new(stdin.lock());
@@ -33,7 +33,13 @@ pub fn run(args: DedupArgs) -> Result<()> {
     let percent = if result.total_documents == 0 {
         0.0
     } else {
-        result.duplicate_count as f64 / result.total_documents as f64 * 100.0
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::as_conversions,
+            reason = "display-only percentage; precision loss above 2^53 documents is irrelevant"
+        )]
+        let ratio = result.duplicate_count as f64 / result.total_documents as f64;
+        ratio * 100.0
     };
     eprintln!(
         "Total: {} documents, {} duplicates ({:.1}%)",

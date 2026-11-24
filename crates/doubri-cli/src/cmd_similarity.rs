@@ -24,7 +24,7 @@ pub struct SimilarityArgs {
     pub text_field: String,
 }
 
-pub fn run(args: SimilarityArgs) -> Result<()> {
+pub fn run(args: &SimilarityArgs) -> Result<()> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
 

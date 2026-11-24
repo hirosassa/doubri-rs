@@ -17,7 +17,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Convert JSONL to MinHash bucket files
+    /// Convert JSONL to `MinHash` bucket files
     Minhash(cmd_minhash::MinhashArgs),
 
     /// Within-group deduplication
@@ -40,11 +40,11 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Minhash(args) => cmd_minhash::run(args),
-        Commands::Dedup(args) => cmd_dedup::run(args),
-        Commands::Merge(args) => cmd_merge::run(args),
-        Commands::Similarity(args) => cmd_similarity::run(args),
-        Commands::ApplyWhole(args) => cmd_apply_whole::run(args),
-        Commands::ApplyEach(args) => cmd_apply_each::run(args),
+        Commands::Minhash(args) => cmd_minhash::run(&args),
+        Commands::Dedup(args) => cmd_dedup::run(&args),
+        Commands::Merge(args) => cmd_merge::run(&args),
+        Commands::Similarity(args) => cmd_similarity::run(&args),
+        Commands::ApplyWhole(args) => cmd_apply_whole::run(&args),
+        Commands::ApplyEach(args) => cmd_apply_each::run(&args),
     }
 }

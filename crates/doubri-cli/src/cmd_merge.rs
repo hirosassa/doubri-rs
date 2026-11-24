@@ -24,16 +24,16 @@ pub struct MergeArgs {
     pub end: u8,
 }
 
-pub fn run(args: MergeArgs) -> Result<()> {
+pub fn run(args: &MergeArgs) -> Result<()> {
     if args.sources.is_empty() {
         anyhow::bail!("no source basenames provided");
     }
 
     let mut sources = Vec::new();
     for basename in &args.sources {
-        let dup_path = format!("{}.dup", basename);
+        let dup_path = format!("{basename}.dup");
         let flags = read_dup_flags(&mut File::open(&dup_path)?)
-            .with_context(|| format!("failed to read {}", dup_path))?;
+            .with_context(|| format!("failed to read {dup_path}"))?;
         sources.push(MergeSource {
             basename: basename.clone(),
             doc_count: flags.len(),

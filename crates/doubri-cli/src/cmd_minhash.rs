@@ -28,7 +28,7 @@ pub struct MinhashArgs {
     pub text_field: String,
 }
 
-pub fn run(args: MinhashArgs) -> Result<()> {
+pub fn run(args: &MinhashArgs) -> Result<()> {
     let config = MinHashConfig {
         ngram_size: args.ngram,
         num_buckets: args.num_buckets,

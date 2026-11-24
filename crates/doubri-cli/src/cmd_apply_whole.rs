@@ -14,7 +14,7 @@ pub struct ApplyWholeArgs {
     pub flag: String,
 }
 
-pub fn run(args: ApplyWholeArgs) -> Result<()> {
+pub fn run(args: &ApplyWholeArgs) -> Result<()> {
     let flags = read_dup_flags(&mut File::open(&args.flag)?)
         .with_context(|| format!("failed to read flag file {}", args.flag))?;
 
@@ -27,6 +27,6 @@ pub fn run(args: ApplyWholeArgs) -> Result<()> {
         apply_whole(reader, &mut writer, &flags).context("apply-whole failed")?
     };
 
-    eprintln!("Output {} documents", count);
+    eprintln!("Output {count} documents");
     Ok(())
 }
