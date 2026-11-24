@@ -2,6 +2,7 @@
 name = "doubri"
 version = "0.1.3"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 publish = false
 repository = "https://github.com/hirosassa/doubri-rs"
@@ -14,6 +15,9 @@ pkg-fmt = "txz"
 
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
 pkg-fmt = "zip"
+
+[lints]
+workspace = true
 
 [dependencies]
 doubri-core = { path = "../doubri-core" }

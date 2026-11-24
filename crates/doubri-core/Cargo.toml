@@ -2,8 +2,12 @@
 name = "doubri-core"
 version = "0.1.3"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
