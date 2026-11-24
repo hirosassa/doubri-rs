@@ -401,3 +401,98 @@ fn unknown_subcommand_is_rejected() {
 
     assert!(!out.status.success());
 }
+
+/// Runs `doubri` expecting a clean error exit (1, not a panic's 101) mentioning `needle`.
+fn assert_fails_with(dir: &Path, args: &[&str], stdin: &str, needle: &str) {
+    let out = doubri(dir, args, stdin);
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains(needle),
+        "expected {needle:?} in: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn apply_whole_fails_cleanly_when_flag_file_is_missing() {
+    let dir = TempDir::new().unwrap();
+    assert_fails_with(
+        dir.path(),
+        &["apply-whole", "-f", "absent.dup"],
+        "",
+        "No such file",
+    );
+}
+
+#[test]
+fn apply_each_fails_cleanly_when_flag_or_source_file_is_missing() {
+    let dir = TempDir::new().unwrap();
+    assert_fails_with(
+        dir.path(),
+        &[
+            "apply-each",
+            "-f",
+            "absent.dup",
+            "-s",
+            "absent.src",
+            "t.hash",
+        ],
+        "",
+        "No such file",
+    );
+
+    std::fs::write(dir.path().join("g.dup"), " ").unwrap();
+    assert_fails_with(
+        dir.path(),
+        &["apply-each", "-f", "g.dup", "-s", "absent.src", "t.hash"],
+        "",
+        "No such file",
+    );
+}
+
+#[test]
+fn apply_each_rejects_malformed_source_list() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("g.dup"), " ").unwrap();
+    std::fs::write(dir.path().join("g.src"), "not-a-count\ta.hash\n").unwrap();
+    assert_fails_with(
+        dir.path(),
+        &["apply-each", "-f", "g.dup", "-s", "g.src", "a.hash"],
+        "",
+        "failed to read source file",
+    );
+}
+
+#[test]
+fn merge_fails_cleanly_when_dup_file_is_missing() {
+    let dir = TempDir::new().unwrap();
+    assert_fails_with(dir.path(), &["merge", "absent"], "", "No such file");
+}
+
+#[test]
+fn dedup_fails_cleanly_when_stdin_lists_no_hash_files() {
+    let dir = TempDir::new().unwrap();
+    assert_fails_with(
+        dir.path(),
+        &["dedup", "g"],
+        "\n  \n",
+        "no hash files provided",
+    );
+}
+
+#[test]
+fn dedup_fails_cleanly_when_listed_hash_file_is_missing() {
+    let dir = TempDir::new().unwrap();
+    assert_fails_with(
+        dir.path(),
+        &["dedup", "g"],
+        "absent.hash\n",
+        "deduplication failed",
+    );
+}
+
+#[test]
+fn similarity_fails_cleanly_on_malformed_json() {
+    let dir = TempDir::new().unwrap();
+    assert_fails_with(dir.path(), &["similarity"], "not json\n", "similarity");
+}
