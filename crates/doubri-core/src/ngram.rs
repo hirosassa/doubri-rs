@@ -115,13 +115,20 @@ impl<'a> Iterator for AsciiNgramIter<'a> {
         F: FnMut(B, Self::Item) -> B,
     {
         let mut acc = init;
-        // Struct invariants: `last = len - n < len`, so `last + 1` cannot wrap, and for every
-        // `start <= last`, `start + n <= len`. Same window/boundary reasoning as `next`.
-        for start in self.pos..self.last.wrapping_add(1) {
-            match self.text.get(start..start.wrapping_add(self.n)) {
-                Some(ngram) => acc = f(acc, ngram),
-                None => break,
-            }
+        // Struct invariants: `pos <= last + 1`, `last = len - n < len` (so `last + 1` cannot
+        // wrap) and `n <= len - pos` while `pos <= last`. Each step takes the first `n` bytes
+        // of the unconsumed suffix and drops one byte, so no offset arithmetic is needed.
+        // ASCII has a char boundary at every offset, so a `get` failure would mean a broken
+        // invariant; it ends the iteration exactly like exhaustion does.
+        let Some(mut rest) = self.text.get(self.pos..) else {
+            return acc;
+        };
+        for _ in self.pos..self.last.wrapping_add(1) {
+            let (Some(ngram), Some(tail)) = (rest.get(..self.n), rest.get(1..)) else {
+                break;
+            };
+            acc = f(acc, ngram);
+            rest = tail;
         }
         acc
     }
