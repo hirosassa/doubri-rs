@@ -1,0 +1,37 @@
+name: formula-dryrun
+
+# Catches drift between the release asset names and the formula generator
+# before a tag is pushed, by generating a formula from an already published
+# release (read-only; nothing is pushed to the tap).
+on:
+  pull_request:
+    paths:
+      - .github/scripts/generate-formula.sh
+      - .github/workflows/release.yml
+      - .github/workflows/formula-dryrun.yml
+
+permissions:
+  contents: read
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # Must be a release uploaded by taiki-e/upload-rust-binary-action
+      # (v0.2.0 or later); bump if its assets are ever removed.
+      TAG: v0.2.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate formula from published release
+        run: .github/scripts/generate-formula.sh "$TAG" "$RUNNER_TEMP/doubri.rb"
+      - name: Validate formula
+        run: |
+          set -euo pipefail
+          f="$RUNNER_TEMP/doubri.rb"
+          cat "$f"
+          test "$(grep -cE '^\s+sha256 "[0-9a-f]{64}"$' "$f")" -eq 4
+          test "$(grep -cE "^\s+url \"https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/doubri-[a-z0-9_-]+\.tar\.xz\"$" "$f")" -eq 4
+          grep -qx '  version "0.2.0"' "$f"
