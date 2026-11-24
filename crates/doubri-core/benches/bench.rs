@@ -8,6 +8,11 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 
@@ -55,8 +60,8 @@ impl Lcg {
     fn next(&mut self) -> u64 {
         self.0 = self
             .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         self.0 >> 33
     }
 }
@@ -81,7 +86,7 @@ fn generate_random_jsonl(num_docs: usize, doc_size: usize) -> String {
     let mut jsonl = String::new();
     for i in 0..num_docs {
         let text = generate_random_ascii_text(doc_size, i as u64 + 1);
-        jsonl.push_str(&format!("{{\"text\":\"{}\"}}\n", text));
+        jsonl.push_str(&format!("{{\"text\":\"{text}\"}}\n"));
     }
     jsonl
 }
@@ -102,7 +107,7 @@ fn generate_jsonl(num_docs: usize, doc_size: usize) -> String {
     let mut jsonl = String::new();
     for i in 0..num_docs {
         // Vary text slightly per document
-        let suffix = format!(" doc{}", i);
+        let suffix = format!(" doc{i}");
         jsonl.push_str(&format!(
             "{{\"text\":\"{}{}\"}}\n",
             &text[..doc_size.saturating_sub(suffix.len())],
@@ -133,14 +138,14 @@ fn bench_char_ngrams(c: &mut Criterion) {
             let ascii = generate_ascii_text(size);
             group.throughput(Throughput::Bytes(size as u64));
             group.bench_with_input(
-                BenchmarkId::new(format!("ascii/{}", label), size),
+                BenchmarkId::new(format!("ascii/{label}"), size),
                 &ascii,
                 |b, text| b.iter(|| char_ngrams(text, ngram_size).count()),
             );
 
             let cjk = generate_cjk_text(size);
             group.bench_with_input(
-                BenchmarkId::new(format!("cjk/{}", label), size),
+                BenchmarkId::new(format!("cjk/{label}"), size),
                 &cjk,
                 |b, text| b.iter(|| char_ngrams(text, ngram_size).count()),
             );
@@ -177,23 +182,23 @@ fn bench_compute_minhash(c: &mut Criterion) {
             let ascii = generate_ascii_text(size);
             group.throughput(Throughput::Bytes(size as u64));
             group.bench_with_input(
-                BenchmarkId::new(format!("ascii/{}", config_label), size),
+                BenchmarkId::new(format!("ascii/{config_label}"), size),
                 &ascii,
-                |b, text| b.iter(|| compute_minhash(text, config)),
+                |b, text| b.iter(|| compute_minhash(text, config).unwrap()),
             );
 
             let cjk = generate_cjk_text(size);
             group.bench_with_input(
-                BenchmarkId::new(format!("cjk/{}", config_label), size),
+                BenchmarkId::new(format!("cjk/{config_label}"), size),
                 &cjk,
-                |b, text| b.iter(|| compute_minhash(text, config)),
+                |b, text| b.iter(|| compute_minhash(text, config).unwrap()),
             );
 
             let random = generate_random_ascii_text(size, 42);
             group.bench_with_input(
-                BenchmarkId::new(format!("ascii_random/{}", config_label), size),
+                BenchmarkId::new(format!("ascii_random/{config_label}"), size),
                 &random,
-                |b, text| b.iter(|| compute_minhash(text, config)),
+                |b, text| b.iter(|| compute_minhash(text, config).unwrap()),
             );
         }
     }
@@ -209,10 +214,10 @@ fn bench_bucket_value(c: &mut Criterion) {
         band_size: 20,
     };
     let text = generate_ascii_text(10_000);
-    let signature = compute_minhash(&text, &config);
+    let signature = compute_minhash(&text, &config).unwrap();
 
     group.bench_function("b20r40", |b| {
-        b.iter(|| bucket_value(&signature, 0, &config))
+        b.iter(|| bucket_value(&signature, 0, &config).unwrap());
     });
     group.finish();
 }
@@ -274,7 +279,7 @@ fn bench_process_jsonl(c: &mut Criterion) {
                     "text",
                 )
                 .unwrap();
-            })
+            });
         });
     }
 
@@ -294,7 +299,7 @@ fn bench_process_jsonl(c: &mut Criterion) {
                         "text",
                     )
                     .unwrap();
-                })
+                });
             },
         );
     }
@@ -311,7 +316,7 @@ const PIPELINE_CONFIG: MinHashConfig = MinHashConfig {
 
 /// Builds a flat signature array where every 10th document duplicates an earlier one.
 fn synthetic_signatures(num_docs: usize, seed: u64) -> Vec<u64> {
-    let total_hashes = PIPELINE_CONFIG.total_hashes();
+    let total_hashes = PIPELINE_CONFIG.total_hashes().unwrap();
     let mut rng = Lcg(seed);
     let mut signatures = vec![0u64; num_docs * total_hashes];
     for doc in 0..num_docs {
@@ -343,7 +348,7 @@ fn write_hash_file(path: &Path, signatures: &[u64], num_docs: usize) {
         &mut writer,
         signatures,
         num_docs,
-        PIPELINE_CONFIG.total_hashes(),
+        PIPELINE_CONFIG.total_hashes().unwrap(),
     )
     .unwrap();
 }
@@ -353,7 +358,7 @@ fn bench_hash_file_io(c: &mut Criterion) {
     group.sample_size(10);
 
     let num_docs = 100_000;
-    let total_hashes = PIPELINE_CONFIG.total_hashes();
+    let total_hashes = PIPELINE_CONFIG.total_hashes().unwrap();
     let signatures = synthetic_signatures(num_docs, 1);
     let header = HashFileHeader {
         num_documents: num_docs as u64,
@@ -368,7 +373,7 @@ fn bench_hash_file_io(c: &mut Criterion) {
             let mut out = Vec::with_capacity(num_docs * total_hashes * 8);
             write_hash_data(&mut out, &signatures, num_docs, total_hashes).unwrap();
             out
-        })
+        });
     });
 
     let mut encoded = Vec::new();
@@ -379,7 +384,7 @@ fn bench_hash_file_io(c: &mut Criterion) {
             let mut cursor = Cursor::new(&encoded);
             let header = read_hash_header(&mut cursor).unwrap();
             read_hash_data(&mut cursor, &header).unwrap()
-        })
+        });
     });
     group.finish();
 }
@@ -413,7 +418,7 @@ fn bench_dedup_group(c: &mut Criterion) {
             run += 1;
             let basename = dir.path().join(format!("out{run}"));
             dedup_group(&hash_files, basename.to_str().unwrap(), false).unwrap()
-        })
+        });
     });
     group.finish();
 }
@@ -445,7 +450,7 @@ fn bench_merge_groups(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(2 * docs_per_group as u64));
     group.bench_function("2x50k/b8r14", |b| {
-        b.iter(|| merge_groups(&sources, 0, 255, false).unwrap())
+        b.iter(|| merge_groups(&sources, 0, 255, false).unwrap());
     });
     group.finish();
 }
@@ -471,7 +476,7 @@ fn bench_apply_whole(c: &mut Criterion) {
             let mut out = Vec::with_capacity(jsonl.len());
             apply_whole(jsonl.as_bytes(), &mut out, &flags).unwrap();
             out
-        })
+        });
     });
     group.finish();
 }

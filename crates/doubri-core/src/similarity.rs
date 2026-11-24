@@ -5,6 +5,7 @@ use crate::error::DoubriError;
 use crate::ngram::char_ngrams;
 
 /// Computes character n-gram based Jaccard similarity between two texts.
+#[must_use]
 pub fn jaccard_similarity(text_a: &str, text_b: &str, ngram_size: usize) -> f64 {
     let set_a: HashSet<&str> = char_ngrams(text_a, ngram_size).collect();
     let set_b: HashSet<&str> = char_ngrams(text_b, ngram_size).collect();
@@ -17,13 +18,29 @@ pub fn jaccard_similarity(text_a: &str, text_b: &str, ngram_size: usize) -> f64 
     }
 
     let intersection = set_a.intersection(&set_b).count();
-    let union = set_a.len() + set_b.len() - intersection;
+    // |A ∪ B| = |A| + |B| - |A ∩ B|. Saturating never triggers here (sizes fit in memory and
+    // the intersection is at most |A| + |B|); it is used instead of `union().count()`, which
+    // is measurably slower on the hot path.
+    let union = set_a
+        .len()
+        .saturating_add(set_b.len())
+        .saturating_sub(intersection);
 
-    intersection as f64 / union as f64
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::as_conversions,
+        reason = "set sizes are far below 2^53, so usize -> f64 is exact"
+    )]
+    let ratio = intersection as f64 / union as f64;
+    ratio
 }
 
 /// Computes pairwise Jaccard similarity for all document pairs from a JSONL stream,
 /// outputting pairs above the threshold.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure, malformed JSON, or a missing text field.
 pub fn compute_pairwise_similarity<R: BufRead, W: Write>(
     reader: R,
     writer: &mut W,
@@ -40,13 +57,13 @@ pub fn compute_pairwise_similarity<R: BufRead, W: Write>(
             continue;
         }
         let json: serde_json::Value = serde_json::from_str(&line)?;
-        let id = json
-            .get(id_field)
-            .map(|v| match v {
+        let id = json.get(id_field).map_or_else(
+            || documents.len().to_string(),
+            |v| match v {
                 serde_json::Value::String(s) => s.clone(),
                 other => other.to_string(),
-            })
-            .unwrap_or_else(|| documents.len().to_string());
+            },
+        );
         let text = json
             .get(text_field)
             .and_then(|v| v.as_str())
@@ -59,12 +76,14 @@ pub fn compute_pairwise_similarity<R: BufRead, W: Write>(
 
     let mut pair_count = 0u64;
 
-    for i in 0..documents.len() {
-        for j in (i + 1)..documents.len() {
-            let sim = jaccard_similarity(&documents[i].1, &documents[j].1, ngram_size);
+    for (i, (id_a, text_a)) in documents.iter().enumerate() {
+        for (id_b, text_b) in documents.iter().skip(i.saturating_add(1)) {
+            let sim = jaccard_similarity(text_a, text_b, ngram_size);
             if sim >= threshold {
-                writeln!(writer, "{:.6}\t{}\t{}", sim, documents[i].0, documents[j].0)?;
-                pair_count += 1;
+                writeln!(writer, "{sim:.6}\t{id_a}\t{id_b}")?;
+                pair_count = pair_count.checked_add(1).ok_or(DoubriError::Overflow {
+                    context: "similar pair count",
+                })?;
             }
         }
     }
@@ -83,6 +102,11 @@ pub fn compute_pairwise_similarity<R: BufRead, W: Write>(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 mod tests {
@@ -205,8 +229,7 @@ mod tests {
         // Format is "sim\tid_a\tid_b"; fallback ids are "0" and "1".
         assert!(
             output_str.contains("\t0\t1"),
-            "expected index-based fallback ids, got {:?}",
-            output_str
+            "expected index-based fallback ids, got {output_str:?}"
         );
     }
 
@@ -225,8 +248,7 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(err, DoubriError::MissingField { ref field } if field == "text"),
-            "expected MissingField for absent text field, got {:?}",
-            err
+            "expected MissingField for absent text field, got {err:?}"
         );
     }
 
@@ -245,8 +267,7 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(err, DoubriError::Json(_)),
-            "expected Json error for malformed line, got {:?}",
-            err
+            "expected Json error for malformed line, got {err:?}"
         );
     }
 

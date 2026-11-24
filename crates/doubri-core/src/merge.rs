@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
-use crate::error::DoubriError;
+use crate::error::{DoubriError, conv};
 use crate::format::{
     FLAG_DUPLICATE, IndexEntry, idx_file_path, read_dup_flags, read_idx_entry, read_idx_header,
     write_dup_flags,
@@ -28,6 +28,11 @@ pub struct MergeResult {
 /// - `sources`: base names for each group (.dup, .idx.* must exist).
 /// - `start_split` / `end_split`: range of split indices to process.
 /// - `reverse`: if true, keeps documents from the newer group.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure, malformed index files, or an item number outside its
+/// group.
 pub fn merge_groups(
     sources: &[MergeSource],
     start_split: u8,
@@ -72,58 +77,64 @@ pub fn merge_groups(
         });
 
         // Detect cross-group duplicates with the same bucket value
-        let mut i = 0;
-        while i < all_entries.len() {
-            let mut j = i + 1;
-            while j < all_entries.len()
-                && all_entries[j].1.bucket_value == all_entries[i].1.bucket_value
-            {
-                j += 1;
+        for group in all_entries.chunk_by(|a, b| a.1.bucket_value == b.1.bucket_value) {
+            let first_group = group
+                .first()
+                .map(|(g, _)| *g)
+                .ok_or(DoubriError::OutOfRange {
+                    context: "empty bucket group",
+                })?;
+
+            // Check if entries come from different groups
+            if !group.iter().any(|(g, _)| *g != first_group) {
+                continue;
             }
 
-            // all_entries[i..j] share the same bucket value
-            if j - i > 1 {
-                // Check if entries come from different groups
-                let first_group = all_entries[i].0;
-                let has_cross_group = all_entries[i..j].iter().any(|(g, _)| *g != first_group);
-
-                if has_cross_group {
-                    let mark_range = if reverse {
-                        &all_entries[i..j - 1]
-                    } else {
-                        &all_entries[i + 1..j]
-                    };
-                    for (group_idx, entry) in mark_range {
-                        let idx = entry.item_number as usize;
-                        let flags = &mut group_flags[*group_idx];
-                        if idx >= flags.len() {
-                            return Err(DoubriError::InvalidFormat {
-                                msg: format!(
-                                    "item_number {} out of bounds for group {} (size {})",
-                                    entry.item_number,
-                                    group_idx,
-                                    flags.len()
-                                ),
-                            });
-                        }
-                        // An item matches once per bucket; count it only the first time
-                        if flags[idx] != FLAG_DUPLICATE {
-                            flags[idx] = FLAG_DUPLICATE;
-                            cross_duplicates += 1;
-                        }
-                    }
+            // Keep the newer one (mark all but the last) when `reverse`,
+            // otherwise keep the older one (mark all but the first).
+            let mark_range = if reverse {
+                group.split_last().map(|(_, rest)| rest)
+            } else {
+                group.split_first().map(|(_, rest)| rest)
+            }
+            .ok_or(DoubriError::OutOfRange {
+                context: "empty bucket group",
+            })?;
+            for (group_idx, entry) in mark_range {
+                let idx: usize = conv(entry.item_number, "item number")?;
+                let flags = group_flags
+                    .get_mut(*group_idx)
+                    .ok_or(DoubriError::OutOfRange {
+                        context: "group index",
+                    })?;
+                let flags_len = flags.len();
+                let flag = flags
+                    .get_mut(idx)
+                    .ok_or_else(|| DoubriError::InvalidFormat {
+                        msg: format!(
+                            "item_number {} out of bounds for group {group_idx} (size {flags_len})",
+                            entry.item_number,
+                        ),
+                    })?;
+                // An item matches once per bucket; count it only the first time
+                if *flag != FLAG_DUPLICATE {
+                    *flag = FLAG_DUPLICATE;
+                    cross_duplicates =
+                        cross_duplicates
+                            .checked_add(1)
+                            .ok_or(DoubriError::Overflow {
+                                context: "cross duplicate count",
+                            })?;
                 }
             }
-
-            i = j;
         }
     }
 
     // Write merged flags
-    for (group_idx, source) in sources.iter().enumerate() {
+    for (source, flags) in sources.iter().zip(&group_flags) {
         let merge_path = format!("{}.dup.merge", source.basename);
         let mut file = BufWriter::new(File::create(&merge_path)?);
-        write_dup_flags(&mut file, &group_flags[group_idx])?;
+        write_dup_flags(&mut file, flags)?;
     }
 
     Ok(MergeResult { cross_duplicates })
@@ -140,6 +151,11 @@ pub fn merge_groups(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::string_slice,
+    clippy::format_push_string,
+    clippy::format_collect,
+    clippy::naive_bytecount,
     reason = "test code"
 )]
 mod tests {
@@ -163,10 +179,10 @@ mod tests {
 
         let mut jsonl = String::new();
         for text in texts {
-            jsonl.push_str(&format!("{{\"text\":\"{}\"}}\n", text));
+            jsonl.push_str(&format!("{{\"text\":\"{text}\"}}\n"));
         }
 
-        let hash_path = dir.join(format!("{}.hash", group_name));
+        let hash_path = dir.join(format!("{group_name}.hash"));
         let mut file = File::create(&hash_path).unwrap();
         process_jsonl(BufReader::new(jsonl.as_bytes()), &mut file, &config, "text").unwrap();
 
@@ -207,8 +223,8 @@ mod tests {
         // Different texts should not produce cross-group duplicates
         // (small params may cause some false positives, but unlikely with these texts)
         // Just verify the merge completes and produces .dup.merge files
-        assert!(Path::new(&format!("{}.dup.merge", basename1)).exists());
-        assert!(Path::new(&format!("{}.dup.merge", basename2)).exists());
+        assert!(Path::new(&format!("{basename1}.dup.merge")).exists());
+        assert!(Path::new(&format!("{basename2}.dup.merge")).exists());
     }
 
     #[test]
@@ -237,9 +253,9 @@ mod tests {
 
         // group1 document is kept, group2 document is marked as duplicate
         let flags1 =
-            read_dup_flags(&mut File::open(format!("{}.dup.merge", basename1)).unwrap()).unwrap();
+            read_dup_flags(&mut File::open(format!("{basename1}.dup.merge")).unwrap()).unwrap();
         let flags2 =
-            read_dup_flags(&mut File::open(format!("{}.dup.merge", basename2)).unwrap()).unwrap();
+            read_dup_flags(&mut File::open(format!("{basename2}.dup.merge")).unwrap()).unwrap();
 
         assert_eq!(flags1[0], FLAG_UNIQUE);
         assert_eq!(flags2[0], FLAG_DUPLICATE);
@@ -270,9 +286,9 @@ mod tests {
 
         // reverse: keep group2, mark group1 as duplicate
         let flags1 =
-            read_dup_flags(&mut File::open(format!("{}.dup.merge", basename1)).unwrap()).unwrap();
+            read_dup_flags(&mut File::open(format!("{basename1}.dup.merge")).unwrap()).unwrap();
         let flags2 =
-            read_dup_flags(&mut File::open(format!("{}.dup.merge", basename2)).unwrap()).unwrap();
+            read_dup_flags(&mut File::open(format!("{basename2}.dup.merge")).unwrap()).unwrap();
 
         assert_eq!(flags1[0], FLAG_DUPLICATE);
         assert_eq!(flags2[0], FLAG_UNIQUE);
@@ -288,7 +304,7 @@ mod tests {
 
         // Each group's dup array holds a single document.
         for basename in [&basename1, &basename2] {
-            let mut file = File::create(format!("{}.dup", basename)).unwrap();
+            let mut file = File::create(format!("{basename}.dup")).unwrap();
             write_dup_flags(&mut file, &[FLAG_UNIQUE]).unwrap();
         }
 
@@ -332,8 +348,7 @@ mod tests {
         let err = merge_groups(&sources, 0, 0, false).unwrap_err();
         assert!(
             matches!(err, DoubriError::InvalidFormat { .. }),
-            "expected InvalidFormat for out-of-range item_number, got {:?}",
-            err
+            "expected InvalidFormat for out-of-range item_number, got {err:?}"
         );
     }
 
@@ -363,7 +378,7 @@ mod tests {
         merge_groups(&sources, 0, 255, false).unwrap();
 
         let read = |b: &str| {
-            read_dup_flags(&mut File::open(format!("{}.dup.merge", b)).unwrap()).unwrap()[0]
+            read_dup_flags(&mut File::open(format!("{b}.dup.merge")).unwrap()).unwrap()[0]
         };
         // forward: the first group is kept, the rest marked duplicate.
         assert_eq!(read(&basename1), FLAG_UNIQUE);
@@ -397,7 +412,7 @@ mod tests {
         merge_groups(&sources, 0, 255, true).unwrap();
 
         let read = |b: &str| {
-            read_dup_flags(&mut File::open(format!("{}.dup.merge", b)).unwrap()).unwrap()[0]
+            read_dup_flags(&mut File::open(format!("{b}.dup.merge")).unwrap()).unwrap()[0]
         };
         // reverse: the last group is kept, earlier ones marked duplicate.
         assert_eq!(read(&basename1), FLAG_DUPLICATE);
