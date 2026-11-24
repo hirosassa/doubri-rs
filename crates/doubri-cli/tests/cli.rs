@@ -257,6 +257,30 @@ fn apply_each_rejects_target_missing_from_source_list() {
 }
 
 #[test]
+fn apply_each_rejects_source_offsets_that_overflow() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("g.dup"), " ").unwrap();
+    std::fs::write(
+        dir.path().join("g.src"),
+        "18446744073709551615\ta.hash\n18446744073709551615\tb.hash\n1\tc.hash\n",
+    )
+    .unwrap();
+    let out = doubri(
+        dir.path(),
+        &["apply-each", "-f", "g.dup", "-s", "g.src", "c.hash"],
+        "",
+    );
+
+    // A clean error exit (1), not a panic (101).
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("overflow"),
+        "unexpected error: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn similarity_reports_only_pairs_above_threshold() {
     let dir = TempDir::new().unwrap();
     let input = jsonl(&[doc("d0", TEXT_A), doc("d1", TEXT_B), doc("d2", TEXT_A)]);

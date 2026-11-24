@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufWriter};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -9,7 +9,7 @@ use doubri_core::format::{read_dup_flags, read_src_file};
 
 #[derive(Args)]
 pub struct ApplyEachArgs {
-    /// Target MinHash file name (looked up in .src to compute offset)
+    /// Target `MinHash` file name (looked up in .src to compute offset)
     pub target: String,
 
     /// Path to the flag file (.dup or .dup.merge)
@@ -21,7 +21,7 @@ pub struct ApplyEachArgs {
     pub source: String,
 }
 
-pub fn run(args: ApplyEachArgs) -> Result<()> {
+pub fn run(args: &ApplyEachArgs) -> Result<()> {
     let flags = read_dup_flags(&mut File::open(&args.flag)?)
         .with_context(|| format!("failed to read flag file {}", args.flag))?;
 
@@ -36,7 +36,11 @@ pub fn run(args: ApplyEachArgs) -> Result<()> {
             found = true;
             break;
         }
-        offset += entry.item_count as usize;
+        let count = usize::try_from(entry.item_count)
+            .with_context(|| format!("item count {} does not fit in usize", entry.item_count))?;
+        offset = offset
+            .checked_add(count)
+            .context("source item counts overflow while computing the target offset")?;
     }
 
     if !found {
@@ -52,10 +56,10 @@ pub fn run(args: ApplyEachArgs) -> Result<()> {
 
     let count = {
         let stdin = io::stdin();
-        let reader = BufReader::new(stdin.lock());
+        let reader = stdin.lock();
         apply_each(reader, &mut writer, &flags, offset).context("apply-each failed")?
     };
 
-    eprintln!("Output {} documents", count);
+    eprintln!("Output {count} documents");
     Ok(())
 }

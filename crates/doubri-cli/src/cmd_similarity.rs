@@ -1,4 +1,4 @@
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufWriter};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -24,13 +24,13 @@ pub struct SimilarityArgs {
     pub text_field: String,
 }
 
-pub fn run(args: SimilarityArgs) -> Result<()> {
+pub fn run(args: &SimilarityArgs) -> Result<()> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
 
     let count = {
         let stdin = io::stdin();
-        let reader = BufReader::new(stdin.lock());
+        let reader = stdin.lock();
         compute_pairwise_similarity(
             reader,
             &mut writer,

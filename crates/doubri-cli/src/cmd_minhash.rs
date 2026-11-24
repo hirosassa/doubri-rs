@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufWriter};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -28,7 +28,7 @@ pub struct MinhashArgs {
     pub text_field: String,
 }
 
-pub fn run(args: MinhashArgs) -> Result<()> {
+pub fn run(args: &MinhashArgs) -> Result<()> {
     let config = MinHashConfig {
         ngram_size: args.ngram,
         num_buckets: args.num_buckets,
@@ -41,7 +41,7 @@ pub fn run(args: MinhashArgs) -> Result<()> {
 
     let count = {
         let stdin = io::stdin();
-        let reader = BufReader::new(stdin.lock());
+        let reader = stdin.lock();
         process_jsonl(reader, &mut writer, &config, &args.text_field).context("minhash failed")?
     };
 
