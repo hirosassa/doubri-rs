@@ -28,16 +28,50 @@ jobs:
           rustup default ${{ matrix.rust }}
 
       - name: Run cargo check
-        run: cargo check --workspace
+        run: cargo check --workspace --all-targets --all-features
 
       - name: Run cargo fmt
         run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        run: cargo clippy --workspace -- -D warnings -W clippy::nursery
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::nursery
+
+      - name: Check production lint allowlist
+        run: python3 scripts/check-lint-allowlist.py
 
       - name: Run cargo test
         run: cargo test --workspace --release
+
+  msrv:
+    name: Check MSRV (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust 1.88
+        run: |
+          rustup toolchain install 1.88 --profile minimal
+          rustup default 1.88
+
+      - name: Build on MSRV
+        run: cargo build --workspace --all-targets --all-features
+
+  supply-chain:
+    name: cargo deny / cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install cargo-deny and cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+
+      - name: Run cargo deny
+        run: cargo deny check
+
+      - name: Run cargo audit
+        run: cargo audit
 
   coverage:
     runs-on: ubuntu-latest

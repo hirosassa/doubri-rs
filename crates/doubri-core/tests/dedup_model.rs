@@ -42,7 +42,7 @@ const POOL: [&str; 6] = [
     "Medieval trade routes connected distant markets through caravans and sea voyages",
 ];
 
-fn config() -> MinHashConfig {
+const fn config() -> MinHashConfig {
     MinHashConfig {
         ngram_size: 5,
         num_buckets: 20,

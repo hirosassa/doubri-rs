@@ -57,7 +57,7 @@ fn generate_ascii_text(size: usize) -> String {
 struct Lcg(u64);
 
 impl Lcg {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         self.0 = self
             .0
             .wrapping_mul(6_364_136_223_846_793_005)
@@ -120,7 +120,7 @@ fn generate_jsonl(num_docs: usize, doc_size: usize) -> String {
 fn make_similar_text(base: &str, similarity: f64) -> String {
     let chars: Vec<char> = base.chars().collect();
     let change_count = ((1.0 - similarity) * chars.len() as f64) as usize;
-    let mut result: Vec<char> = chars.clone();
+    let mut result: Vec<char> = chars;
     for i in 0..change_count.min(result.len()) {
         result[i] = 'X';
     }
